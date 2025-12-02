@@ -1,0 +1,807 @@
+import random
+import numpy as np
+import plotly.graph_objects as go
+
+class GachaSimulator:
+    def __init__(self, initial_guaranteed=False, initial_coral=0, initial_pity_5star=0, initial_pity_weapon=0):
+        """
+        定义所有实例属性并初始化
+        """
+        self.initial_guaranteed = initial_guaranteed
+        self.initial_coral = initial_coral
+        self.initial_pity_5star = initial_pity_5star
+        self.initial_pity_weapon = initial_pity_weapon
+
+        # 五星限定角色是否保底
+        self.featured_5star_guaranteed = False
+        # 距上个五星的抽数
+        self.pity_5star = 0
+        # 常驻池五星角色及已有数、抽到数：'角色名': [链数, 抽到]
+        self.standard_5stars = {}
+        # 限定池五星角色及已有数、抽到数：'角色名': [链数, 抽到]
+        self.featured_5stars = {}
+        # 本期概率up的限定五星角色
+        self.rate_up_5star = ''
+        # 距上个四星的抽数
+        self.pity_4star = 0
+        # 四星角色及已有数、抽到数：'角色名': [链数, 抽到]
+        self._4stars = {}
+        # 本期概率up的四星角色
+        self.rate_up_4stars = []
+        # 抽取的三星武器数量
+        self.weapon = 0
+        # 本次抽取事件中获取的余波珊瑚（大珊瑚）
+        self.total_afterglow_coral_count = 0
+        # 本次抽取事件中获取的残振珊瑚（小珊瑚）
+        self.total_oscillated_coral_count = 0
+        # 总抽数
+        self.pull_count = 0
+
+        # 武器池相关属性
+        self.pity_5star_weapon = 0
+        self.pity_4star_weapon = 0
+        self.featured_weapon_count = 0
+
+        # 调用reset方法初始化
+        self.reset()
+
+    def reset(self):
+        """
+        重置所有状态到初始值
+        """
+        self.featured_5star_guaranteed = self.initial_guaranteed
+        self.pity_5star = self.initial_pity_5star
+        self.standard_5stars = {
+            '凌阳': [-1, 0],
+            '安可': [-1, 0],
+            '卡卡罗': [-1, 0],
+            '鉴心': [-1, 0],
+            '维里奈': [-1, 0],
+        }
+        self.featured_5stars = {
+            '折枝': [-1, 0],
+            '珂莱塔': [-1, 0],
+            '长离': [-1, 0],
+            '布兰特': [-1, 0],
+            '露帕': [-1, 0],
+            '吟霖': [-1, 0],
+            '相里要': [-1, 0],
+            '奥古斯特': [-1, 0],
+            '忌炎': [-1, 0],
+            '夏空': [-1, 0],
+            '卡提希娅': [-1, 0],
+            '尤诺': [-1, 0],
+            '今汐': [-1, 0],
+            '守岸人': [-1, 0],
+            '菲比': [-1, 0],
+            '赞妮': [-1, 0],
+            '椿': [-1, 0],
+            '洛可可': [-1, 0],
+            '坎特蕾拉': [-1, 0],
+            '弗洛洛': [-1, 0],
+        }
+        self.rate_up_5star = '弗洛洛'
+        self.pity_4star = 0
+        self._4stars = {
+            '散华': [4, 0],
+            '白芷': [-1, 0],
+            '釉瑚': [-1, 0],
+            '炽霞': [0, 0],
+            '莫特斐': [-1, 0],
+            '渊武': [-1, 0],
+            '灯灯': [-1, 0],
+            '泱泱': [-1, 0],
+            '秋水': [-1, 0],
+            '桃祈': [-1, 0],
+            '丹瑾': [0, 0],
+            '卜灵': [-1, 0]
+        }
+        self.rate_up_4stars = ['炽霞', '丹瑾', '卜灵']
+        # 设置四星UP角色均为0链
+        for char in self.rate_up_4stars:
+            self._4stars[char] = [0, 1]
+
+        # 武器池初始化
+        self.pity_5star_weapon = self.initial_pity_weapon
+        self.pity_4star_weapon = 0
+        self.featured_weapon_count = 0
+
+        self.total_afterglow_coral_count = self.initial_coral
+        self.gained_afterglow_coral_count = 0
+        self.total_oscillated_coral_count = 0
+
+    @staticmethod
+    def rate_5star(rate_number: int):
+        """
+        计算当前抽卡的五星概率
+        参数：
+            rate_number: 距上个五星为第几抽
+        返回：
+            float: 本次抽到五星的概率
+        """
+        # 概率
+        local_rate = 0
+        if rate_number < 66:
+            local_rate = 0.008
+        elif rate_number < 71:
+            local_rate = 0.008 + 0.04*(rate_number - 65)
+        elif rate_number < 76:
+            local_rate = 0.208 + 0.08*(rate_number - 70)
+        elif rate_number < 79:
+            local_rate = 0.608 + 0.1*(rate_number - 75)
+        elif rate_number == 79:
+            local_rate = 1
+        else:
+            print(f'五星保底计数错误：{rate_number}，应小于或等于79！')
+        return local_rate
+
+    @staticmethod
+    def rate_4star(rate_number: int):
+        """
+        计算当前抽卡的四星概率
+        参数：
+            rate_number: 距上个四星为第几抽
+        返回：
+            float: 本次抽到四星的概率
+        """
+        # 概率
+        local_rate = 0
+        if rate_number < 10:
+            local_rate = 0.06
+        elif rate_number == 10:
+            local_rate = 1
+        else:
+            print(f'四星保底计数错误：{rate_number}，应小于或等于10！')
+        return local_rate
+
+    def pull(self):
+        """
+        执行一次抽卡
+        返回：
+            tuple[str, int, int]
+            --抽取到的角色或武器
+            --本次抽取获得的余波珊瑚（大珊瑚）
+            --本次抽取获取的残振珊瑚（小珊瑚）
+        """
+        # 本次抽到的角色或武器
+        local_item = ''
+        # 本次抽取获得的余波珊瑚（大珊瑚）
+        local_obtained_afterglow_coral = 0
+        # 本次抽取获取的残振珊瑚（小珊瑚）
+        local_obtained_oscillated_coral = 0
+
+        # 用于对抽取物判断的随机浮点数，区间[0, 1)
+        local_random = random.random()
+
+        # 检查是否抽到五星角色
+        if self.rate_5star(self.pity_5star + 1) > local_random:
+            # 抽到五星，重置五星角色保底计数
+            self.pity_5star = 0
+
+            # 如果本次同时满足四星角色保底，重置四星角色保底计数
+            if self.pity_4star == 9:
+                self.pity_4star = 0
+
+            # 检查抽到的是常驻五星还是限定五星角色
+            if not self.featured_5star_guaranteed and random.random() < 0.5:
+                # 抽到常驻五星角色
+                # 设置大保底，下次五星必定为本期限定五星角色
+                self.featured_5star_guaranteed = True
+                # 判断抽取到的常驻五星角色
+                local_item = random.choice(list(self.standard_5stars.keys()))
+
+                # 更新常驻五星角色拥有情况和抽到数，计算本次获取的珊瑚
+                if self.standard_5stars[local_item][0] < 6:
+                    # 常驻五星角色未满链，链数和抽到数+1、获得45余波珊瑚（大珊瑚）
+                    self.standard_5stars[local_item][0] += 1
+                    self.standard_5stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 45
+                else:
+                    # 常驻五星角色已满链，链数不变，抽到数+1、获得70余波珊瑚（大珊瑚）
+                    self.standard_5stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 70
+            else:
+                # 抽到限定五星角色，
+                # 重置大保底
+                self.featured_5star_guaranteed = False
+                local_item = self.rate_up_5star
+
+                # 更新限定五星角色拥有情况和抽到数，计算本次获取的珊瑚
+                if self.featured_5stars[local_item][0] < 7:
+                    # 限定五星角色未满链，链数和抽到数+1、获得15余波珊瑚（大珊瑚）
+                    self.featured_5stars[local_item][0] += 1
+                    self.featured_5stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 15
+                else:
+                    # 限定五星角色已满链，链数不变，抽到数+1、获得40余波珊瑚（大珊瑚）
+                    self.featured_5stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 40
+
+        # 检查是否抽到四星角色
+        elif self.rate_4star(self.pity_4star + 1) > local_random:
+            # 抽到四星角色，重置四星角色保底计数
+            self.pity_4star = 0
+            # 五星角色保底计数+1
+            self.pity_5star += 1
+
+            # 检查抽到的是概率up四星还是非概率up四星角色
+            if random.random() < 0.5:
+                # 抽到非概率up四星角色
+                # 创建非概率up四星角色列表
+                local_non_rate_up_4stars = [c for c in self._4stars if c not in self.rate_up_4stars]
+                # 判断抽取到的非概率up四星角色
+                local_item = random.choice(local_non_rate_up_4stars)
+            else:
+                # 抽到概率up四星角色
+                # 判断抽取到的概率up四星角色
+                local_item = random.choice(self.rate_up_4stars)
+
+            # 更新四星角色拥有情况和抽到数，计算本次获取的珊瑚
+            if self._4stars[local_item][0] < 6:
+                # 四星角色未满链，链数和抽到数+1、获得3余波珊瑚（大珊瑚）
+                self._4stars[local_item][0] += 1
+                self._4stars[local_item][1] += 1
+                local_obtained_afterglow_coral = 3
+            else:
+                # 四星角色已满链，链数不变，抽到数+1、获得8余波珊瑚（大珊瑚）
+                self._4stars[local_item][1] += 1
+                local_obtained_afterglow_coral = 8
+
+        # 既没抽到五星角色，也没抽到四星角色，则抽取到三星武器
+        else:
+            # 四星和五星角色保底计数+1
+            self.pity_4star += 1
+            self.pity_5star += 1
+            local_item = '3星武器'
+            # 三星武器计数+1
+            self.weapon += 1
+
+            # 抽到三星武器，获得15残振珊瑚（小珊瑚）
+            local_obtained_oscillated_coral = 15
+
+        return local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral
+
+    def pull_weapon(self):
+        """
+        执行一次武器池抽卡
+        返回：
+            tuple[str, int, int]
+            --抽取到的角色或武器
+            --本次抽取获得的余波珊瑚（大珊瑚）
+            --本次抽取获取的残振珊瑚（小珊瑚）
+        """
+        # 本次抽到的角色或武器
+        local_item = ''
+        # 本次抽取获得的余波珊瑚（大珊瑚）
+        local_obtained_afterglow_coral = 0
+        # 本次抽取获取的残振珊瑚（小珊瑚）
+        local_obtained_oscillated_coral = 0
+
+        # 用于对抽取物判断的随机浮点数，区间[0, 1)
+        local_random = random.random()
+
+        # 检查是否抽到五星武器
+        if self.rate_5star(self.pity_5star_weapon + 1) > local_random:
+            # 抽到五星，重置五星武器保底计数
+            self.pity_5star_weapon = 0
+
+            # 如果本次同时满足四星保底，重置四星保底计数
+            if self.pity_4star_weapon == 9:
+                self.pity_4star_weapon = 0
+
+            # 武器池五星必定是当期UP
+            local_item = '当期专武'
+            self.featured_weapon_count += 1
+            # 假设重复获得五星武器给15余波珊瑚
+            local_obtained_afterglow_coral = 15
+
+        # 检查是否抽到四星
+        elif self.rate_4star(self.pity_4star_weapon + 1) > local_random:
+            # 抽到四星，重置四星保底计数
+            self.pity_4star_weapon = 0
+            # 五星保底计数+1
+            self.pity_5star_weapon += 1
+
+            # 检查抽到的是概率up四星还是非概率up四星
+            # 假设武器池四星逻辑同角色池
+            if random.random() < 0.5:
+                # 抽到非概率up四星
+                local_non_rate_up_4stars = [c for c in self._4stars if c not in self.rate_up_4stars]
+                local_item = random.choice(local_non_rate_up_4stars)
+            else:
+                # 抽到概率up四星
+                local_item = random.choice(self.rate_up_4stars)
+
+            # 更新四星角色拥有情况和抽到数，计算本次获取的珊瑚
+            if self._4stars[local_item][0] < 6:
+                self._4stars[local_item][0] += 1
+                self._4stars[local_item][1] += 1
+                local_obtained_afterglow_coral = 3
+            else:
+                self._4stars[local_item][1] += 1
+                local_obtained_afterglow_coral = 8
+
+        # 既没抽到五星，也没抽到四星，则抽取到三星武器
+        else:
+            # 四星和五星保底计数+1
+            self.pity_4star_weapon += 1
+            self.pity_5star_weapon += 1
+            local_item = '3星武器'
+            # 三星武器计数+1
+            self.weapon += 1
+
+            # 抽到三星武器，获得15残振珊瑚（小珊瑚）
+            local_obtained_oscillated_coral = 15
+
+        return local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral
+
+    def simulate_pulls(self, num_pulls: int, banner_type: str = 'character', verbose: bool = False):
+        """
+        模拟多次抽卡
+        参数：
+            num_pulls: 抽卡次数
+            banner_type: 卡池类型 'character' 或 'weapon'
+            verbose: 是否显示每次抽卡结果
+        """
+        # 执行指定次数抽卡
+        for pull in range(num_pulls):
+            # 总抽数更新
+            self.pull_count += 1
+            # 执行一次抽卡，获得抽取物、珊瑚
+            if banner_type == 'weapon':
+                local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral = self.pull_weapon()
+            else:
+                local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral = self.pull()
+            
+            self.total_afterglow_coral_count += local_obtained_afterglow_coral
+            self.gained_afterglow_coral_count += local_obtained_afterglow_coral
+            self.total_oscillated_coral_count += local_obtained_oscillated_coral
+
+            if verbose:
+                # verbose为True，输出抽卡结果
+                if local_obtained_afterglow_coral > 8:
+                    print(f'第{self.pull_count}抽：获得\033[33m{local_item:-^10}\033[0m和'
+                          f'{local_obtained_afterglow_coral}余波珊瑚。')
+                elif local_obtained_afterglow_coral > 0:
+                    print(f'第{self.pull_count}抽：获得\033[35m{local_item:-^10}\033[0m和'
+                          f'{local_obtained_afterglow_coral}余波珊瑚。')
+                elif local_obtained_oscillated_coral > 0:
+                    print(f'第{self.pull_count}抽：获得{local_item:-^10}和{local_obtained_oscillated_coral}残振珊瑚。')
+                else:
+                    # 正常情况下此种情况不存在
+                    print(f'第{self.pull_count}抽：获得{local_item:-^10}。')
+
+    def get_pity_info(self):
+        """
+        获取当前保底信息
+        返回：
+            dict: 包含保底抽数信息的字典
+        """
+        return {
+            'pity_5star': self.pity_5star,
+            'pity_4star': self.pity_4star,
+            'featured_5star_guaranteed': self.featured_5star_guaranteed
+        }
+
+    def get_character_stats(self):
+        """
+        获取所有角色统计信息
+        返回：
+            dict: 包含角色统计信息的字典
+        """
+        stats = {
+            'featured_5star': {},
+            'standard_5stars': {},
+            'star_4s': {},
+        }
+
+        # 限定五星统计
+        for char, (owned, obtained) in self.featured_5stars.items():
+            if obtained > 0:
+                stats['featured_5star'][char] = {
+                    'owned': owned,
+                    'obtained': obtained,
+                }
+
+        # 常驻五星统计
+        for char, (owned, obtained) in self.standard_5stars.items():
+            if obtained > 0:
+                stats['standard_5stars'][char] = {
+                    'owned': owned,
+                    'obtained': obtained
+                }
+
+        # 四星统计
+        for char, (owned, obtained) in self._4stars.items():
+            if obtained > 0:
+                stats['star_4s'][char] = {
+                    'owned': owned,
+                    'obtained': obtained
+                }
+
+        return stats
+
+    def set_banner(self, featured_5star: str, featured_4stars: list):
+        """
+        设置当前卡池概率up角色
+        参数:
+            featured_5star: 限定5星角色名
+            featured_4stars: UP四星角色列表
+        """
+        self.rate_up_5star = featured_5star
+        self.rate_up_4stars = featured_4stars.copy()
+
+        # 确保限定5星在字典中，否则将其加入角色池
+        if featured_5star not in self.featured_5stars:
+            self.featured_5stars[featured_5star] = [-1, 0]
+
+        # 确保UP四星在字典中，否则将其加入角色池
+        for char in featured_4stars:
+            if char not in self._4stars:
+                self._4stars[char] = [-1, 0]
+
+
+if __name__ == '__main__':
+    # 获取用户输入的目标链数
+    try:
+        target_chain_input = input("请输入想要获取的限定五星角色链数：")
+        if not target_chain_input.strip():
+            print("未输入，默认计算0链。")
+            target_chain = 0
+        else:
+            target_chain = int(target_chain_input)
+            if target_chain < 0 or target_chain > 6:
+                print("输入错误，链数必须在0到6之间。")
+                exit()
+    except ValueError:
+        print("输入错误，请输入整数。")
+        exit()
+
+    # 获取用户输入的目标专武数量
+    try:
+        target_weapon_input = input("请输入想要获取的限定五星专武数量：")
+        if not target_weapon_input.strip():
+            print("未输入，默认计算0把。")
+            target_weapon = 0
+        else:
+            target_weapon = int(target_weapon_input)
+            if target_weapon < 0 or target_weapon > 5:
+                print("输入错误，数量必须在0到5之间。")
+                exit()
+    except ValueError:
+        print("输入错误，请输入整数。")
+        exit()
+
+    # 获取用户输入的初始状态
+    guaranteed_input = input("下一个五星是否大保底 (y/n): ")
+    initial_guaranteed = True if guaranteed_input.strip().lower() == 'y' else False
+
+    coral_input = input("目前有多少余波珊瑚: ")
+    try:
+        initial_coral = int(coral_input) if coral_input.strip() else 0
+    except ValueError:
+        print("输入错误，默认0。")
+        initial_coral = 0
+
+    pity_5star_input = input("角色池已垫抽数 (0-79，默认0): ")
+    try:
+        initial_pity_5star = int(pity_5star_input) if pity_5star_input.strip() else 0
+        if initial_pity_5star < 0 or initial_pity_5star > 79:
+            print("输入错误，默认0。")
+            initial_pity_5star = 0
+    except ValueError:
+        print("输入错误，默认0。")
+        initial_pity_5star = 0
+
+    pity_weapon_input = input("武器池已垫抽数 (0-79，默认0): ")
+    try:
+        initial_pity_weapon = int(pity_weapon_input) if pity_weapon_input.strip() else 0
+        if initial_pity_weapon < 0 or initial_pity_weapon > 79:
+            print("输入错误，默认0。")
+            initial_pity_weapon = 0
+    except ValueError:
+        print("输入错误，默认0。")
+        initial_pity_weapon = 0
+
+    # 模拟次数
+    n = 100000
+    # 最终抽数统计
+    pulls_count_list = []
+    # 剩余余波珊瑚统计
+    remaining_afterglow_list = []
+    # 剩余残振珊瑚统计
+    remaining_oscillated_list = []
+    # 抽卡期间获得的余波珊瑚统计
+    gained_afterglow_list = []
+    # 兑换共鸣链数量统计
+    exchanged_chains_list = []
+
+    print(f"开始模拟抽取 {target_chain} 链角色 + {target_weapon} 把专武，模拟次数：{n}...")
+
+    for i in range(n):
+        # 创建抽卡模拟器实例
+        simulator = GachaSimulator(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon)
+        
+        exchanged_num = 0
+
+        # 优化策略：
+        # 1. 先确保拥有角色 (0链)，解锁兑换资格。
+        # 2. 抽满所有武器，积攒珊瑚。
+        # 3. 补齐剩余角色链数 (利用所有珊瑚)。
+
+        # 1. 确保拥有角色 (解锁兑换)
+        # 如果当前未拥有且目标需要角色，先抽到 0 链
+        if target_chain >= 0 and simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
+            while simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
+                simulator.simulate_pulls(1, banner_type='character', verbose=False)
+
+        # 2. 抽武器 (积攒珊瑚)
+        while simulator.featured_weapon_count < target_weapon:
+            simulator.simulate_pulls(1, banner_type='weapon', verbose=False)
+
+        # 3. 补齐角色
+        while True:
+            # 检查是否达成角色目标
+            current_chain = simulator.featured_5stars[simulator.rate_up_5star][0]
+            
+            character_done = False
+            # 此时一定拥有角色了 (除非目标是-1或者没抽)
+            if current_chain >= 0:
+                needed = target_chain - current_chain
+                if needed <= 0:
+                    character_done = True
+                elif needed <= 2 and simulator.total_afterglow_coral_count >= needed * 360:
+                    # 扣除珊瑚，视为达成
+                    simulator.total_afterglow_coral_count -= needed * 360
+                    exchanged_num += needed
+                    character_done = True
+                # 支持逐个兑换：如果缺2个但只够换1个，先换1个
+                elif needed > 0 and simulator.total_afterglow_coral_count >= 360:
+                     simulator.total_afterglow_coral_count -= 360
+                     exchanged_num += 1
+                     # 手动增加链数，以便下一次循环判断
+                     simulator.featured_5stars[simulator.rate_up_5star][0] += 1
+                     continue
+            
+            if character_done:
+                break
+            
+            simulator.simulate_pulls(1, banner_type='character', verbose=False)
+
+        # 记录结果
+        pulls_count_list.append(simulator.pull_count)
+        remaining_afterglow_list.append(simulator.total_afterglow_coral_count)
+        remaining_oscillated_list.append(simulator.total_oscillated_coral_count)
+        gained_afterglow_list.append(simulator.gained_afterglow_coral_count)
+        exchanged_chains_list.append(exchanged_num)
+
+    average = sum(pulls_count_list) / len(pulls_count_list)
+    average_gained_afterglow = sum(gained_afterglow_list) / len(gained_afterglow_list)
+    average_exchanged_chains = sum(exchanged_chains_list) / len(exchanged_chains_list)
+    average_total_before_exchange = initial_coral + average_gained_afterglow
+
+    # 计算余波珊瑚众数
+    vals_afterglow, counts_afterglow = np.unique(remaining_afterglow_list, return_counts=True)
+    mode_afterglow = vals_afterglow[np.argmax(counts_afterglow)]
+
+    # 计算残振珊瑚众数
+    vals_oscillated, counts_oscillated = np.unique(remaining_oscillated_list, return_counts=True)
+    mode_oscillated = vals_oscillated[np.argmax(counts_oscillated)]
+
+    values, counts = np.unique(pulls_count_list, return_counts=True)
+    
+    # 计算频率峰值（众数）
+    mode_pulls = values[np.argmax(counts)]
+    # 计算最大值（模拟中的实际最大值）
+    max_pulls = np.max(pulls_count_list)
+    
+    # 计算理论硬保底 (Theoretical Max)
+    # 修正：基于“先抽1只角色 -> 抽满武器 -> 抽剩余角色”的最优策略计算
+    
+    needed_copies = target_chain + 1
+    
+    # 武器池最大抽数
+    max_weapon_pulls = target_weapon * 79 - initial_pity_weapon
+    max_weapon_pulls = max(0, max_weapon_pulls)
+    
+    # 武器池最差珊瑚产出 (五星15 + 四星)
+    weapon_coral = target_weapon * 15 + (max_weapon_pulls // 10) * 3
+
+    # 角色池最差情况分析
+    # 必须先抽 1 只解锁兑换 (除非 needed_copies <= 0)
+    # 第一只的最大抽数
+    first_char_pulls = 0
+    first_char_coral = 0
+    
+    remaining_copies = needed_copies
+    
+    if needed_copies > 0:
+        # 计算第1只的代价
+        if initial_guaranteed:
+            first_char_pulls = 79 - initial_pity_5star
+            first_char_coral = 15 # 必中
+        else:
+            first_char_pulls = 158 - initial_pity_5star
+            first_char_coral = 60 # 歪(45) + 中(15)
+        
+        first_char_pulls = max(0, first_char_pulls)
+        # 加上四星珊瑚
+        first_char_coral += (first_char_pulls // 10) * 3
+        
+        remaining_copies -= 1
+
+    # 此时拥有的基础珊瑚 (初始 + 第1只产出 + 武器产出)
+    base_coral = initial_coral + first_char_coral + weapon_coral
+    
+    # 剩余需要抽取的角色数: remaining_copies
+    # 我们需要判断能兑换几个 (最多2个)
+    exchangeable = 0
+    max_ex = min(2, remaining_copies) # 最多换2个，且不能超过剩余需求
+    
+    # 辅助：计算后续 N 只角色的最大抽数和珊瑚
+    def calc_rest_cost(n):
+        if n <= 0: return 0, 0
+        # 后续角色默认都是小保底开始 (最坏情况)
+        # 每次 158 抽，产出 60 珊瑚
+        p = n * 158
+        c = n * 60 + (p // 10) * 3
+        return p, c
+
+    if max_ex == 2:
+        # 尝试换2个
+        # 需要抽 remaining_copies - 2 个
+        rem = remaining_copies - 2
+        p, c = calc_rest_cost(rem)
+        if base_coral + c >= 720:
+            exchangeable = 2
+        else:
+            max_ex = 1
+            
+    if max_ex == 1 and exchangeable == 0:
+        # 尝试换1个
+        rem = remaining_copies - 1
+        p, c = calc_rest_cost(rem)
+        if base_coral + c >= 360:
+            exchangeable = 1
+            
+    # 最终理论最大抽数
+    # = 第一只抽数 + 武器抽数 + (剩余需抽数 * 158)
+    theoretical_max = first_char_pulls + max_weapon_pulls + (remaining_copies - exchangeable) * 158
+
+    # 计算累积概率
+    cumulative_probabilities = np.cumsum(counts) / n * 100
+
+    if go:
+        # 使用 Plotly 绘制交互式 HTML 图表
+        fig = go.Figure()
+
+        # 1. 频率直方图 (左轴)
+        fig.add_trace(go.Bar(
+            x=values,
+            y=counts,
+            name='频率 (Frequency)',
+            marker_color='skyblue',
+            opacity=0.6,
+            yaxis='y1',
+            hovertemplate='抽数: %{x}<br>频率: %{y}<extra></extra>'
+        ))
+
+        # 2. 累积概率折线图 (右轴)
+        fig.add_trace(go.Scatter(
+            x=values,
+            y=cumulative_probabilities,
+            name='累积概率 (Cumulative %)',
+            line=dict(color='red', width=3),
+            yaxis='y2',
+            hovertemplate='抽数: %{x}<br>累积概率: %{y:.2f}%<extra></extra>'
+        ))
+
+        # 3. 添加辅助线 (期望、众数、必得)
+        # 定义一个添加美化标签的辅助函数
+        def add_styled_annotation(x_val, text, color, y_pos, line_dash="dash", double_line=False):
+            if double_line:
+                # 双实线效果：底层宽线 + 顶层细白线 (利用遮罩模拟双线)
+                fig.add_vline(x=x_val, line_width=5, line_dash="solid", line_color=color)
+                fig.add_vline(x=x_val, line_width=2, line_dash="solid", line_color="white")
+            else:
+                fig.add_vline(x=x_val, line_width=3, line_dash=line_dash, line_color=color)
+
+            fig.add_annotation(
+                x=x_val, 
+                y=y_pos, 
+                yref="paper",
+                text=f"<b>{text}</b>",
+                showarrow=False,        # 不显示箭头
+                font=dict(color=color, size=16, family="HarmonyOS Sans SC"),
+                bgcolor="rgba(255, 255, 255, 0.9)",
+                bordercolor=color,
+                borderwidth=2,
+                borderpad=6,
+                xanchor="center"        # 居中对齐
+            )
+
+        # 策略：期望和众数通常非常接近，为了防止重叠，默认将它们错开高度
+        # 期望放在第一层 (y=1.05)
+        add_styled_annotation(average, f"期望: {average:.2f}", "orange", 1.05)
+        
+        # 众数放在第二层 (y=1.08)，这样无论如何缩放都不会重叠
+        add_styled_annotation(mode_pulls, f"众数: {mode_pulls}", "green", 1.10)
+
+        # 必得通常较远，可以放回第一层 (y=1.05)，与期望对齐
+        # 显示模拟最大值
+        add_styled_annotation(max_pulls, f"模拟最大抽数: {max_pulls}", "black", 1.05, line_dash="solid")
+        
+        # 如果模拟最大值没达到理论保底，额外显示理论保底
+        if max_pulls <= theoretical_max:
+             add_styled_annotation(theoretical_max, f"理论最大抽数: {theoretical_max}", "gray", 1.10, line_dash="solid")
+
+        # 4. 更新布局配置
+        fig.update_layout(
+            font=dict(family="HarmonyOS Sans SC"), # 全局字体设置，涵盖大部分文本
+            margin=dict(t=140), # 增加顶部边距以容纳两层标签
+            title=dict(
+                text=f'<b>鸣潮抽卡模拟分布</b> ({target_chain} 链角色 + {target_weapon} 把专武)',
+                font=dict(size=24, family="HarmonyOS Sans SC")
+            ),
+            xaxis=dict(
+                title=dict(text='抽数 (Pull Count)', font=dict(family="HarmonyOS Sans SC")),
+                tickfont=dict(family="HarmonyOS Sans SC"), # 显式设置刻度字体
+                gridcolor='rgba(0,0,0,0.1)'
+            ),
+            # 左轴：频率
+            yaxis=dict(
+                title=dict(text='频率 (Frequency)', font=dict(color='skyblue', family="HarmonyOS Sans SC")),
+                tickfont=dict(color='skyblue', family="HarmonyOS Sans SC"), # 显式设置刻度字体
+                showgrid=False,  # 隐藏频率网格，避免干扰
+                fixedrange=True  # 锁定Y轴，只允许横向缩放
+            ),
+            # 右轴：累积概率
+            yaxis2=dict(
+                title=dict(text='累积概率 (%)', font=dict(color='red', family="HarmonyOS Sans SC")),
+                tickfont=dict(color='red', family="HarmonyOS Sans SC"), # 显式设置刻度字体
+                overlaying='y',
+                side='right',
+                range=[0, 105],
+                showgrid=True,   # 显示概率网格
+                gridcolor='rgba(255, 0, 0, 0.1)', # 红色淡网格
+                dtick=10,        # 每10%一条线
+                fixedrange=True  # 锁定Y轴，只允许横向缩放
+            ),
+            # 交互设置
+            hovermode="x unified",  # 鼠标悬停时显示该x轴上所有数据
+            template="plotly_white", # 简洁白底风格
+            dragmode='pan',         # 默认鼠标操作为平移，体验更丝滑
+            legend=dict(
+                x=0.01,
+                y=0.99,
+                bgcolor='rgba(255, 255, 255, 0.8)',
+                font=dict(family="HarmonyOS Sans SC")
+            ),
+            # 优化悬停标签样式
+            hoverlabel=dict(
+                bgcolor="rgba(255, 255, 255, 0.95)",
+                font_size=14,
+                font_family="HarmonyOS Sans SC"
+            )
+        )
+
+        # 5. 直接展示 (不生成本地文件)
+        print("\n[提示] 正在生成交互式图表，请稍候...")
+        # config 配置：开启滚轮缩放，隐藏 Plotly logo，开启响应式
+        fig.show(config={
+            'scrollZoom': True, 
+            'displaylogo': False, 
+            'responsive': True,
+            'modeBarButtonsToRemove': ['select2d', 'lasso2d'] # 移除不常用的选择工具，保持界面简洁
+        })
+    else:
+        print("\n[警告] 未安装 plotly，无法生成图表。请运行 pip install plotly 安装。")
+
+    print("-----------------------------------------------------------")
+    print(f'共经过 {n} 次模拟，获得当期 {target_chain} 链限定五星角色 + {target_weapon} 把专武所需的抽数统计：')
+    print(f'期望抽数：{average:.2f} (约 {int(average * 160)} 星声)')
+    print(f'众数抽数：{mode_pulls} (约 {mode_pulls * 160} 星声)')
+    print(f'模拟最大抽数：{max_pulls} (约 {max_pulls * 160} 星声)')
+    print(f'理论最大抽数：{theoretical_max} (约 {theoretical_max * 160} 星声)')
+    print(f'（注：以上统计已包含余波珊瑚换取限定角色共鸣链，最多换取2个）')
+    print("-----------------------------------------------------------")
