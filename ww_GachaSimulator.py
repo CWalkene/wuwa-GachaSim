@@ -1,12 +1,11 @@
 import random
 import numpy as np
 import plotly.graph_objects as go
+import multiprocessing  # 引入多进程模块
 
 class GachaSimulator:
     def __init__(self, initial_guaranteed=False, initial_coral=0, initial_pity_5star=0, initial_pity_weapon=0):
-        """
-        定义所有实例属性并初始化
-        """
+        # 定义所有实例属性并初始化
         self.initial_guaranteed = initial_guaranteed
         self.initial_coral = initial_coral
         self.initial_pity_5star = initial_pity_5star
@@ -440,6 +439,62 @@ class GachaSimulator:
             if char not in self._4stars:
                 self._4stars[char] = [-1, 0]
 
+def run_simulation_task(args):
+    # 单个模拟任务函数，用于多进程调用
+    initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon = args
+    
+    simulator = GachaSimulator(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon)
+    exchanged_num = 0
+
+    # 优化策略：
+    # 1. 先确保拥有角色 (0链)，解锁兑换资格。
+    # 2. 抽满所有武器，积攒珊瑚。
+    # 3. 补齐剩余角色链数 (利用所有珊瑚)。
+
+    # 1. 确保拥有角色 (解锁兑换)
+    # 如果当前未拥有且目标需要角色，先抽到 0 链
+    if target_chain >= 0 and simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
+        while simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
+            simulator.simulate_pulls(1, banner_type='character', verbose=False)
+
+    # 2. 抽武器 (积攒珊瑚)
+    while simulator.featured_weapon_count < target_weapon:
+        simulator.simulate_pulls(1, banner_type='weapon', verbose=False)
+
+    # 3. 补齐角色
+    while True:
+        # 检查是否达成角色目标
+        current_chain = simulator.featured_5stars[simulator.rate_up_5star][0]
+        
+        character_done = False
+        # 此时一定拥有角色了 (除非目标是-1或者没抽)
+        if current_chain >= 0:
+            needed = target_chain - current_chain
+            if needed <= 0:
+                character_done = True
+            elif needed <= 2 and simulator.total_afterglow_coral_count >= needed * 360:
+                # 扣除珊瑚，视为达成
+                simulator.total_afterglow_coral_count -= needed * 360
+                exchanged_num += needed
+                character_done = True
+            # 支持逐个兑换：如果缺2个但只够换1个，先换1个
+            elif needed > 0 and simulator.total_afterglow_coral_count >= 360:
+                    simulator.total_afterglow_coral_count -= 360
+                    exchanged_num += 1
+                    # 手动增加链数，以便下一次循环判断
+                    simulator.featured_5stars[simulator.rate_up_5star][0] += 1
+                    continue
+        
+        if character_done:
+            break
+        
+        simulator.simulate_pulls(1, banner_type='character', verbose=False)
+
+    return (simulator.pull_count, 
+            simulator.total_afterglow_coral_count, 
+            simulator.total_oscillated_coral_count, 
+            simulator.gained_afterglow_coral_count, 
+            exchanged_num)
 
 if __name__ == '__main__':
     # 获取用户输入的目标链数
@@ -504,76 +559,32 @@ if __name__ == '__main__':
         initial_pity_weapon = 0
 
     # 模拟次数
-    n = 100000
-    # 最终抽数统计
-    pulls_count_list = []
-    # 剩余余波珊瑚统计
-    remaining_afterglow_list = []
-    # 剩余残振珊瑚统计
-    remaining_oscillated_list = []
-    # 抽卡期间获得的余波珊瑚统计
-    gained_afterglow_list = []
-    # 兑换共鸣链数量统计
-    exchanged_chains_list = []
+    n = 1000000
+    
+    # 准备并行任务参数
+    sim_args = (initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon)
+    # 创建任务列表
+    tasks = [sim_args] * n
 
     print(f"开始模拟抽取 {target_chain} 链角色 + {target_weapon} 把专武，模拟次数：{n}...")
+    
+    cpu_count = multiprocessing.cpu_count()
+    print(f"正在使用 {cpu_count} 个核心进行并行计算...")
 
-    for i in range(n):
-        # 创建抽卡模拟器实例
-        simulator = GachaSimulator(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon)
-        
-        exchanged_num = 0
+    # 创建进程池并执行
+    with multiprocessing.Pool(processes=cpu_count) as pool:
+        # chunksize 设置为 100 可以减少进程间通信开销
+        results = pool.map(run_simulation_task, tasks, chunksize=100)
 
-        # 优化策略：
-        # 1. 先确保拥有角色 (0链)，解锁兑换资格。
-        # 2. 抽满所有武器，积攒珊瑚。
-        # 3. 补齐剩余角色链数 (利用所有珊瑚)。
-
-        # 1. 确保拥有角色 (解锁兑换)
-        # 如果当前未拥有且目标需要角色，先抽到 0 链
-        if target_chain >= 0 and simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
-            while simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
-                simulator.simulate_pulls(1, banner_type='character', verbose=False)
-
-        # 2. 抽武器 (积攒珊瑚)
-        while simulator.featured_weapon_count < target_weapon:
-            simulator.simulate_pulls(1, banner_type='weapon', verbose=False)
-
-        # 3. 补齐角色
-        while True:
-            # 检查是否达成角色目标
-            current_chain = simulator.featured_5stars[simulator.rate_up_5star][0]
-            
-            character_done = False
-            # 此时一定拥有角色了 (除非目标是-1或者没抽)
-            if current_chain >= 0:
-                needed = target_chain - current_chain
-                if needed <= 0:
-                    character_done = True
-                elif needed <= 2 and simulator.total_afterglow_coral_count >= needed * 360:
-                    # 扣除珊瑚，视为达成
-                    simulator.total_afterglow_coral_count -= needed * 360
-                    exchanged_num += needed
-                    character_done = True
-                # 支持逐个兑换：如果缺2个但只够换1个，先换1个
-                elif needed > 0 and simulator.total_afterglow_coral_count >= 360:
-                     simulator.total_afterglow_coral_count -= 360
-                     exchanged_num += 1
-                     # 手动增加链数，以便下一次循环判断
-                     simulator.featured_5stars[simulator.rate_up_5star][0] += 1
-                     continue
-            
-            if character_done:
-                break
-            
-            simulator.simulate_pulls(1, banner_type='character', verbose=False)
-
-        # 记录结果
-        pulls_count_list.append(simulator.pull_count)
-        remaining_afterglow_list.append(simulator.total_afterglow_coral_count)
-        remaining_oscillated_list.append(simulator.total_oscillated_coral_count)
-        gained_afterglow_list.append(simulator.gained_afterglow_coral_count)
-        exchanged_chains_list.append(exchanged_num)
+    # 解包结果
+    pulls_count_list, remaining_afterglow_list, remaining_oscillated_list, gained_afterglow_list, exchanged_chains_list = zip(*results)
+    
+    # 转回 list 以保持兼容性
+    pulls_count_list = list(pulls_count_list)
+    remaining_afterglow_list = list(remaining_afterglow_list)
+    remaining_oscillated_list = list(remaining_oscillated_list)
+    gained_afterglow_list = list(gained_afterglow_list)
+    exchanged_chains_list = list(exchanged_chains_list)
 
     average = sum(pulls_count_list) / len(pulls_count_list)
     average_gained_afterglow = sum(gained_afterglow_list) / len(gained_afterglow_list)
