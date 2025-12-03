@@ -1,7 +1,21 @@
 import random
 import numpy as np
 import plotly.graph_objects as go
-import multiprocessing  # 引入多进程模块
+from numba import njit, prange
+
+# 预计算概率表
+RATE_5_STAR = np.zeros(81)
+for i in range(81):
+    if i < 66: RATE_5_STAR[i] = 0.008
+    elif i < 71: RATE_5_STAR[i] = 0.008 + 0.04 * (i - 65)
+    elif i < 76: RATE_5_STAR[i] = 0.208 + 0.08 * (i - 70)
+    elif i < 79: RATE_5_STAR[i] = 0.608 + 0.1 * (i - 75)
+    else: RATE_5_STAR[i] = 1.0
+
+RATE_4_STAR = np.zeros(12)
+for i in range(12):
+    if i < 10: RATE_4_STAR[i] = 0.06
+    else: RATE_4_STAR[i] = 1.0
 
 class GachaSimulator:
     def __init__(self, initial_guaranteed=False, initial_coral=0, initial_pity_5star=0, initial_pity_weapon=0):
@@ -96,9 +110,6 @@ class GachaSimulator:
             '卜灵': [-1, 0]
         }
         self.rate_up_4stars = ['炽霞', '丹瑾', '卜灵']
-        # 设置四星UP角色均为0链
-        for char in self.rate_up_4stars:
-            self._4stars[char] = [0, 1]
 
         # 武器池初始化
         self.pity_5star_weapon = self.initial_pity_weapon
@@ -111,47 +122,13 @@ class GachaSimulator:
 
     @staticmethod
     def rate_5star(rate_number: int):
-        """
-        计算当前抽卡的五星概率
-        参数：
-            rate_number: 距上个五星为第几抽
-        返回：
-            float: 本次抽到五星的概率
-        """
-        # 概率
-        local_rate = 0
-        if rate_number < 66:
-            local_rate = 0.008
-        elif rate_number < 71:
-            local_rate = 0.008 + 0.04*(rate_number - 65)
-        elif rate_number < 76:
-            local_rate = 0.208 + 0.08*(rate_number - 70)
-        elif rate_number < 79:
-            local_rate = 0.608 + 0.1*(rate_number - 75)
-        elif rate_number == 79:
-            local_rate = 1
-        else:
-            print(f'五星保底计数错误：{rate_number}，应小于或等于79！')
-        return local_rate
+        if rate_number > 80: return 1.0
+        return RATE_5_STAR[rate_number]
 
     @staticmethod
     def rate_4star(rate_number: int):
-        """
-        计算当前抽卡的四星概率
-        参数：
-            rate_number: 距上个四星为第几抽
-        返回：
-            float: 本次抽到四星的概率
-        """
-        # 概率
-        local_rate = 0
-        if rate_number < 10:
-            local_rate = 0.06
-        elif rate_number == 10:
-            local_rate = 1
-        else:
-            print(f'四星保底计数错误：{rate_number}，应小于或等于10！')
-        return local_rate
+        if rate_number > 11: return 1.0
+        return RATE_4_STAR[rate_number]
 
     def pull(self):
         """
@@ -439,62 +416,226 @@ class GachaSimulator:
             if char not in self._4stars:
                 self._4stars[char] = [-1, 0]
 
-def run_simulation_task(args):
-    # 单个模拟任务函数，用于多进程调用
-    initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon = args
+@njit
+def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains):
+    # 局部变量初始化
+    pity_5 = initial_pity_5star
+    pity_4 = 0
     
-    simulator = GachaSimulator(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon)
+    # 角色池状态
+    featured_chain = -1
+    # standard_chains: 5个常驻角色，初始-1
+    standard_chains = np.full(5, -1, dtype=np.int8)
+    # four_star_chains: 12个四星角色。前3个为UP，后9个为非UP
+    four_star_chains = initial_four_star_chains.copy()
+    
+    # 武器池状态
+    pity_5_weapon = initial_pity_weapon
+    pity_4_weapon = 0
+    featured_weapon_count = 0
+    
+    # 资源
+    coral = initial_coral
+    oscillated_coral = 0
+    gained_coral = 0
+    pull_count = 0
     exchanged_num = 0
+    
+    is_guaranteed = initial_guaranteed
+    
+    # 1. 确保拥有角色 (0链)
+    if target_chain >= 0 and featured_chain < 0:
+        while featured_chain < 0:
+            pull_count += 1
+            r = random.random()
+            
+            # 检查五星
+            rate_5 = RATE_5_STAR[pity_5 + 1] if pity_5 < 80 else 1.0
+            if rate_5 > r:
+                pity_5 = 0
+                if pity_4 == 9: pity_4 = 0
+                
+                if not is_guaranteed and random.random() < 0.5:
+                    # 歪常驻
+                    is_guaranteed = True
+                    idx = int(random.random() * 5) # 0-4
+                    if standard_chains[idx] < 6:
+                        standard_chains[idx] += 1
+                        c = 45
+                    else:
+                        c = 70
+                    coral += c
+                    gained_coral += c
+                else:
+                    # 中限定
+                    is_guaranteed = False
+                    if featured_chain < 7: 
+                        featured_chain += 1
+                        c = 15
+                    else:
+                        c = 40
+                    coral += c
+                    gained_coral += c
+            
+            # 检查四星
+            else:
+                rate_4 = RATE_4_STAR[pity_4 + 1] if pity_4 < 11 else 1.0
+                if rate_4 > r:
+                    pity_4 = 0
+                    pity_5 += 1
+                    
+                    if random.random() < 0.5:
+                        idx = 3 + int(random.random() * 9)
+                    else:
+                        idx = int(random.random() * 3)
+                    
+                    if four_star_chains[idx] < 6:
+                        four_star_chains[idx] += 1
+                        c = 3
+                    else:
+                        c = 8
+                    coral += c
+                    gained_coral += c
+                
+                # 三星
+                else:
+                    pity_4 += 1
+                    pity_5 += 1
+                    oscillated_coral += 15
 
-    # 优化策略：
-    # 1. 先确保拥有角色 (0链)，解锁兑换资格。
-    # 2. 抽满所有武器，积攒珊瑚。
-    # 3. 补齐剩余角色链数 (利用所有珊瑚)。
-
-    # 1. 确保拥有角色 (解锁兑换)
-    # 如果当前未拥有且目标需要角色，先抽到 0 链
-    if target_chain >= 0 and simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
-        while simulator.featured_5stars[simulator.rate_up_5star][0] < 0:
-            simulator.simulate_pulls(1, banner_type='character', verbose=False)
-
-    # 2. 抽武器 (积攒珊瑚)
-    while simulator.featured_weapon_count < target_weapon:
-        simulator.simulate_pulls(1, banner_type='weapon', verbose=False)
+    # 2. 抽武器
+    while featured_weapon_count < target_weapon:
+        pull_count += 1
+        r = random.random()
+        
+        # 五星武器
+        rate_5 = RATE_5_STAR[pity_5_weapon + 1] if pity_5_weapon < 80 else 1.0
+        if rate_5 > r:
+            pity_5_weapon = 0
+            if pity_4_weapon == 9: pity_4_weapon = 0
+            
+            featured_weapon_count += 1
+            c = 15
+            coral += c
+            gained_coral += c
+            
+        # 四星
+        else:
+            rate_4 = RATE_4_STAR[pity_4_weapon + 1] if pity_4_weapon < 11 else 1.0
+            if rate_4 > r:
+                pity_4_weapon = 0
+                pity_5_weapon += 1
+                
+                if random.random() < 0.5:
+                    idx = 3 + int(random.random() * 9)
+                else:
+                    idx = int(random.random() * 3)
+                
+                if four_star_chains[idx] < 6:
+                    four_star_chains[idx] += 1
+                    c = 3
+                else:
+                    c = 8
+                coral += c
+                gained_coral += c
+            
+            # 三星
+            else:
+                pity_4_weapon += 1
+                pity_5_weapon += 1
+                oscillated_coral += 15
 
     # 3. 补齐角色
     while True:
-        # 检查是否达成角色目标
-        current_chain = simulator.featured_5stars[simulator.rate_up_5star][0]
-        
-        character_done = False
-        # 此时一定拥有角色了 (除非目标是-1或者没抽)
-        if current_chain >= 0:
-            needed = target_chain - current_chain
+        if featured_chain >= 0:
+            needed = target_chain - featured_chain
             if needed <= 0:
-                character_done = True
-            elif needed <= 2 and simulator.total_afterglow_coral_count >= needed * 360:
-                # 扣除珊瑚，视为达成
-                simulator.total_afterglow_coral_count -= needed * 360
+                break
+            elif needed <= 2 and coral >= needed * 360:
+                coral -= needed * 360
                 exchanged_num += needed
-                character_done = True
-            # 支持逐个兑换：如果缺2个但只够换1个，先换1个
-            elif needed > 0 and simulator.total_afterglow_coral_count >= 360:
-                    simulator.total_afterglow_coral_count -= 360
-                    exchanged_num += 1
-                    # 手动增加链数，以便下一次循环判断
-                    simulator.featured_5stars[simulator.rate_up_5star][0] += 1
-                    continue
+                break
+            elif needed > 0 and coral >= 360:
+                coral -= 360
+                exchanged_num += 1
+                featured_chain += 1
+                continue
         
-        if character_done:
-            break
+        pull_count += 1
+        r = random.random()
         
-        simulator.simulate_pulls(1, banner_type='character', verbose=False)
+        # 检查五星
+        rate_5 = RATE_5_STAR[pity_5 + 1] if pity_5 < 80 else 1.0
+        if rate_5 > r:
+            pity_5 = 0
+            if pity_4 == 9: pity_4 = 0
+            
+            if not is_guaranteed and random.random() < 0.5:
+                is_guaranteed = True
+                idx = int(random.random() * 5)
+                if standard_chains[idx] < 6:
+                    standard_chains[idx] += 1
+                    c = 45
+                else:
+                    c = 70
+                coral += c
+                gained_coral += c
+            else:
+                is_guaranteed = False
+                if featured_chain < 7:
+                    featured_chain += 1
+                    c = 15
+                else:
+                    c = 40
+                coral += c
+                gained_coral += c
+        
+        # 检查四星
+        else:
+            rate_4 = RATE_4_STAR[pity_4 + 1] if pity_4 < 11 else 1.0
+            if rate_4 > r:
+                pity_4 = 0
+                pity_5 += 1
+                
+                if random.random() < 0.5:
+                    idx = 3 + int(random.random() * 9)
+                else:
+                    idx = int(random.random() * 3)
+                
+                if four_star_chains[idx] < 6:
+                    four_star_chains[idx] += 1
+                    c = 3
+                else:
+                    c = 8
+                coral += c
+                gained_coral += c
+            
+            # 三星
+            else:
+                pity_4 += 1
+                pity_5 += 1
+                oscillated_coral += 15
+    
+    return pull_count, coral, oscillated_coral, gained_coral, exchanged_num
 
-    return (simulator.pull_count, 
-            simulator.total_afterglow_coral_count, 
-            simulator.total_oscillated_coral_count, 
-            simulator.gained_afterglow_coral_count, 
-            exchanged_num)
+@njit(parallel=True)
+def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains):
+    # Pre-allocate arrays
+    pulls_count_arr = np.zeros(n, dtype=np.int32)
+    remaining_afterglow_arr = np.zeros(n, dtype=np.int32)
+    remaining_oscillated_arr = np.zeros(n, dtype=np.int32)
+    gained_afterglow_arr = np.zeros(n, dtype=np.int32)
+    exchanged_chains_arr = np.zeros(n, dtype=np.int32)
+
+    for i in prange(n):
+        res = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains)
+        pulls_count_arr[i] = res[0]
+        remaining_afterglow_arr[i] = res[1]
+        remaining_oscillated_arr[i] = res[2]
+        gained_afterglow_arr[i] = res[3]
+        exchanged_chains_arr[i] = res[4]
+
+    return pulls_count_arr, remaining_afterglow_arr, remaining_oscillated_arr, gained_afterglow_arr, exchanged_chains_arr
 
 if __name__ == '__main__':
     # 获取用户输入的目标链数
@@ -558,37 +699,38 @@ if __name__ == '__main__':
         print("输入错误，默认0。")
         initial_pity_weapon = 0
 
+    # 获取初始四星状态 (从GachaSimulator类中读取)
+    sim = GachaSimulator()
+    initial_four_star_chains = np.zeros(12, dtype=np.int8)
+    
+    # 映射UP四星 (索引0-2)
+    for i, char_name in enumerate(sim.rate_up_4stars):
+        initial_four_star_chains[i] = sim._4stars[char_name][0]
+        
+    # 映射非UP四星 (索引3-11)
+    non_up_chars = [c for c in sim._4stars if c not in sim.rate_up_4stars]
+    for i, char_name in enumerate(non_up_chars):
+        initial_four_star_chains[3 + i] = sim._4stars[char_name][0]
+
     # 模拟次数
     n = 1000000
     
-    # 准备并行任务参数
-    sim_args = (initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon)
-    # 创建任务列表
-    tasks = [sim_args] * n
-
     print(f"开始模拟抽取 {target_chain} 链角色 + {target_weapon} 把专武，模拟次数：{n}...")
-    
-    cpu_count = multiprocessing.cpu_count()
-    print(f"正在使用 {cpu_count} 个核心进行并行计算...")
+    print(f"正在使用 Numba Parallel (OpenMP/TBB) 进行并行计算...")
 
-    # 创建进程池并执行
-    with multiprocessing.Pool(processes=cpu_count) as pool:
-        # chunksize 设置为 100 可以减少进程间通信开销
-        results = pool.map(run_simulation_task, tasks, chunksize=100)
+    # 执行并行模拟
+    # 注意：第一次运行会包含编译时间
+    import time
+    t0 = time.time()
+    pulls_count_list, remaining_afterglow_list, remaining_oscillated_list, gained_afterglow_list, exchanged_chains_list = run_simulations_parallel(
+        n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains
+    )
+    t1 = time.time()
+    print(f"模拟完成，耗时: {t1 - t0:.4f}s")
 
-    # 解包结果
-    pulls_count_list, remaining_afterglow_list, remaining_oscillated_list, gained_afterglow_list, exchanged_chains_list = zip(*results)
-    
-    # 转回 list 以保持兼容性
-    pulls_count_list = list(pulls_count_list)
-    remaining_afterglow_list = list(remaining_afterglow_list)
-    remaining_oscillated_list = list(remaining_oscillated_list)
-    gained_afterglow_list = list(gained_afterglow_list)
-    exchanged_chains_list = list(exchanged_chains_list)
-
-    average = sum(pulls_count_list) / len(pulls_count_list)
-    average_gained_afterglow = sum(gained_afterglow_list) / len(gained_afterglow_list)
-    average_exchanged_chains = sum(exchanged_chains_list) / len(exchanged_chains_list)
+    average = np.mean(pulls_count_list)
+    average_gained_afterglow = np.mean(gained_afterglow_list)
+    average_exchanged_chains = np.mean(exchanged_chains_list)
     average_total_before_exchange = initial_coral + average_gained_afterglow
 
     # 计算余波珊瑚众数
@@ -609,6 +751,10 @@ if __name__ == '__main__':
     # 计算理论硬保底 (Theoretical Max)
     # 修正：基于“先抽1只角色 -> 抽满武器 -> 抽剩余角色”的最优策略计算
     
+    # 检查四星是否全满命
+    is_all_4star_full = np.all(initial_four_star_chains >= 6)
+    coral_per_4star = 8 if is_all_4star_full else 3
+
     needed_copies = target_chain + 1
     
     # 武器池最大抽数
@@ -616,7 +762,7 @@ if __name__ == '__main__':
     max_weapon_pulls = max(0, max_weapon_pulls)
     
     # 武器池最差珊瑚产出 (五星15 + 四星)
-    weapon_coral = target_weapon * 15 + (max_weapon_pulls // 10) * 3
+    weapon_coral = target_weapon * 15 + (max_weapon_pulls // 10) * coral_per_4star
 
     # 角色池最差情况分析
     # 必须先抽 1 只解锁兑换 (除非 needed_copies <= 0)
@@ -637,7 +783,7 @@ if __name__ == '__main__':
         
         first_char_pulls = max(0, first_char_pulls)
         # 加上四星珊瑚
-        first_char_coral += (first_char_pulls // 10) * 3
+        first_char_coral += (first_char_pulls // 10) * coral_per_4star
         
         remaining_copies -= 1
 
@@ -655,7 +801,7 @@ if __name__ == '__main__':
         # 后续角色默认都是小保底开始 (最坏情况)
         # 每次 158 抽，产出 60 珊瑚
         p = n * 158
-        c = n * 60 + (p // 10) * 3
+        c = n * 60 + (p // 10) * coral_per_4star
         return p, c
 
     if max_ex == 2:
