@@ -81,8 +81,14 @@ def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type):
                 else:
                     return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
         else:
-            # 武器池：不区分UP/非UP，统一返回 OUTCOME_4_STAR_WEAPON
-            return OUTCOME_4_STAR_WEAPON, new_pity_5, new_pity_4, is_guaranteed, is_4star_guaranteed
+            # 武器池：应用4星保底逻辑
+            if is_4star_guaranteed:
+                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
+            else:
+                if random.random() < 0.5:
+                    return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, True
+                else:
+                    return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
             
     # 三星
     return OUTCOME_3_STAR, pity_5 + 1, pity_4 + 1, is_guaranteed, is_4star_guaranteed
@@ -99,6 +105,8 @@ class GachaSimulator:
         self.featured_5star_guaranteed = False
         # 四星限定角色是否保底
         self.featured_4star_guaranteed = False
+        # 四星限定武器是否保底
+        self.featured_4star_weapon_guaranteed = False
         # 距上个五星的抽数
         self.pity_5star = 0
         # 常驻池五星角色及已有数、抽到数：'角色名': [链数, 抽到]
@@ -136,6 +144,7 @@ class GachaSimulator:
         """
         self.featured_5star_guaranteed = self.initial_guaranteed
         self.featured_4star_guaranteed = False
+        self.featured_4star_weapon_guaranteed = False
         self.pity_5star = self.initial_pity_5star
         
         # 默认配置
@@ -286,18 +295,32 @@ class GachaSimulator:
                 local_obtained_afterglow_coral = 8
 
         elif outcome == OUTCOME_4_STAR_OTHER:
-            # 抽到非概率up四星角色
+            # 抽到非概率up四星角色或武器
+            # 角色池非UP四星池：所有非UP四星角色 + 20把四星武器
             local_non_rate_up_4stars = [c for c in self._4stars if c not in self.rate_up_4stars]
-            local_item = random.choice(local_non_rate_up_4stars)
-            if self._4stars[local_item][0] < 6:
-                # 四星角色未满链，链数和抽到数+1、获得3余波珊瑚（大珊瑚）
-                self._4stars[local_item][0] += 1
-                self._4stars[local_item][1] += 1
-                local_obtained_afterglow_coral = 3
+            # 武器列表 (20把)
+            weapon_pool_size = 20
+            
+            total_pool_size = len(local_non_rate_up_4stars) + weapon_pool_size
+            r = random.randint(0, total_pool_size - 1)
+            
+            if r < len(local_non_rate_up_4stars):
+                # 抽到角色
+                local_item = local_non_rate_up_4stars[r]
+                if self._4stars[local_item][0] < 6:
+                    # 四星角色未满链，链数和抽到数+1、获得3余波珊瑚（大珊瑚）
+                    self._4stars[local_item][0] += 1
+                    self._4stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 3
+                else:
+                    # 四星角色已满链，链数不变，抽到数+1、获得8余波珊瑚（大珊瑚）
+                    self._4stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 8
             else:
-                # 四星角色已满链，链数不变，抽到数+1、获得8余波珊瑚（大珊瑚）
-                self._4stars[local_item][1] += 1
-                local_obtained_afterglow_coral = 8
+                # 抽到武器
+                local_item = '4星武器'
+                # 获得3余波珊瑚
+                local_obtained_afterglow_coral = 3
 
         else:
             # 抽到三星武器
@@ -327,9 +350,9 @@ class GachaSimulator:
 
         # 调用核心逻辑 (banner_type=1)
         # 注意：武器池没有“大保底”概念，is_guaranteed传False即可，返回值忽略
-        # 武器池也不使用角色池的4星保底，传入False，返回值忽略
-        outcome, self.pity_5star_weapon, self.pity_4star_weapon, _, _ = core_pull(
-            self.pity_5star_weapon, self.pity_4star_weapon, False, False, 1
+        # 武器池使用四星保底逻辑
+        outcome, self.pity_5star_weapon, self.pity_4star_weapon, _, self.featured_4star_weapon_guaranteed = core_pull(
+            self.pity_5star_weapon, self.pity_4star_weapon, False, self.featured_4star_weapon_guaranteed, 1
         )
 
         if outcome == OUTCOME_5_STAR_UP:
@@ -340,27 +363,31 @@ class GachaSimulator:
             local_obtained_afterglow_coral = 15
 
         elif outcome == OUTCOME_4_STAR_UP:
-            # 抽到概率up四星
-            local_item = random.choice(self.rate_up_4stars)
-            if self._4stars[local_item][0] < 6:
-                self._4stars[local_item][0] += 1
-                self._4stars[local_item][1] += 1
-                local_obtained_afterglow_coral = 3
-            else:
-                self._4stars[local_item][1] += 1
-                local_obtained_afterglow_coral = 8
+            # UP 4星武器 (3把)
+            local_item = 'UP 4星武器'
+            local_obtained_afterglow_coral = 3
 
         elif outcome == OUTCOME_4_STAR_OTHER:
-            # 抽到非概率up四星
-            local_non_rate_up_4stars = [c for c in self._4stars if c not in self.rate_up_4stars]
-            local_item = random.choice(local_non_rate_up_4stars)
-            if self._4stars[local_item][0] < 6:
-                self._4stars[local_item][0] += 1
-                self._4stars[local_item][1] += 1
-                local_obtained_afterglow_coral = 3
+            # 非UP 4星 (所有角色 + 17把武器)
+            all_chars = list(self._4stars.keys())
+            weapon_pool_size = 17
+            total_pool_size = len(all_chars) + weapon_pool_size
+            
+            r = random.randint(0, total_pool_size - 1)
+            if r < len(all_chars):
+                # 抽到角色
+                local_item = all_chars[r]
+                if self._4stars[local_item][0] < 6:
+                    self._4stars[local_item][0] += 1
+                    self._4stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 3
+                else:
+                    self._4stars[local_item][1] += 1
+                    local_obtained_afterglow_coral = 8
             else:
-                self._4stars[local_item][1] += 1
-                local_obtained_afterglow_coral = 8
+                # 抽到武器
+                local_item = '4星武器'
+                local_obtained_afterglow_coral = 3
 
         else:
             # 抽到三星武器
@@ -498,6 +525,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     pity_5_weapon = initial_pity_weapon
     pity_4_weapon = 0
     featured_weapon_count = 0
+    is_4star_weapon_guaranteed = False
     
     # 资源
     coral = initial_coral
@@ -543,7 +571,48 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 coral += c
                 gained_coral += c
             elif outcome == OUTCOME_4_STAR_OTHER:
-                idx = 3 + int(random.random() * 9)
+                # 9个非UP角色 + 20把武器 = 29
+                r = random.random() * 29
+                if r < 9:
+                    # 角色 (假设前9个是非UP角色)
+                    idx = 3 + int(r) # 3-11
+                    four_star_obtained[idx] += 1
+                    if four_star_chains[idx] < 6:
+                        four_star_chains[idx] += 1
+                        c = 3
+                    else:
+                        c = 8
+                    coral += c
+                    gained_coral += c
+                else:
+                    # 武器
+                    c = 3
+                    coral += c
+                    gained_coral += c
+            else: # 3 Star
+                oscillated_coral += 15
+
+    # 2. 抽武器
+    while featured_weapon_count < target_weapon:
+        pull_count += 1
+        outcome, pity_5_weapon, pity_4_weapon, _, is_4star_weapon_guaranteed = core_pull(pity_5_weapon, pity_4_weapon, False, is_4star_weapon_guaranteed, 1)
+        
+        if outcome == OUTCOME_5_STAR_UP:
+            featured_weapon_count += 1
+            c = 15
+            coral += c
+            gained_coral += c
+        elif outcome == OUTCOME_4_STAR_UP:
+            # UP Weapon
+            c = 3
+            coral += c
+            gained_coral += c
+        elif outcome == OUTCOME_4_STAR_OTHER:
+            # Other: 12 Chars + 17 Weapons = 29
+            r = random.random() * 29
+            if r < 12:
+                # Character
+                idx = int(r) # 0-11 (All chars)
                 four_star_obtained[idx] += 1
                 if four_star_chains[idx] < 6:
                     four_star_chains[idx] += 1
@@ -552,30 +621,11 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                     c = 8
                 coral += c
                 gained_coral += c
-            else: # 3 Star
-                oscillated_coral += 15
-
-    # 2. 抽武器
-    while featured_weapon_count < target_weapon:
-        pull_count += 1
-        outcome, pity_5_weapon, pity_4_weapon, _, _ = core_pull(pity_5_weapon, pity_4_weapon, False, False, 1)
-        
-        if outcome == OUTCOME_5_STAR_UP:
-            featured_weapon_count += 1
-            c = 15
-            coral += c
-            gained_coral += c
-        elif outcome == OUTCOME_4_STAR_WEAPON:
-            # 武器池四星：从所有12个四星中随机选择
-            idx = int(random.random() * 12)
-            four_star_obtained[idx] += 1
-            if four_star_chains[idx] < 6:
-                four_star_chains[idx] += 1
-                c = 3
             else:
-                c = 8
-            coral += c
-            gained_coral += c
+                # Weapon
+                c = 3
+                coral += c
+                gained_coral += c
         else: # 3 Star
             oscillated_coral += 15
 
@@ -626,15 +676,24 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             coral += c
             gained_coral += c
         elif outcome == OUTCOME_4_STAR_OTHER:
-            idx = 3 + int(random.random() * 9)
-            four_star_obtained[idx] += 1
-            if four_star_chains[idx] < 6:
-                four_star_chains[idx] += 1
-                c = 3
+            # 9个非UP角色 + 20把武器 = 29
+            r = random.random() * 29
+            if r < 9:
+                # 角色 (假设前9个是非UP角色)
+                idx = 3 + int(r) # 3-11
+                four_star_obtained[idx] += 1
+                if four_star_chains[idx] < 6:
+                    four_star_chains[idx] += 1
+                    c = 3
+                else:
+                    c = 8
+                coral += c
+                gained_coral += c
             else:
-                c = 8
-            coral += c
-            gained_coral += c
+                # 武器
+                c = 3
+                coral += c
+                gained_coral += c
         else: # 3 Star
             oscillated_coral += 15
     
