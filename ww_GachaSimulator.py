@@ -1,4 +1,6 @@
 import random
+import json
+import os
 import numpy as np
 import plotly.graph_objects as go
 from numba import njit, prange
@@ -137,6 +139,8 @@ class GachaSimulator:
         self.featured_5star_guaranteed = self.initial_guaranteed
         self.featured_4star_guaranteed = False
         self.pity_5star = self.initial_pity_5star
+        
+        # 默认配置
         self.standard_5stars = {
             '凌阳': [-1, 0],
             '安可': [-1, 0],
@@ -144,30 +148,10 @@ class GachaSimulator:
             '鉴心': [-1, 0],
             '维里奈': [-1, 0],
         }
+        self.rate_up_5star = '当期限定五星'
         self.featured_5stars = {
-            '折枝': [-1, 0],
-            '珂莱塔': [-1, 0],
-            '长离': [-1, 0],
-            '布兰特': [-1, 0],
-            '露帕': [-1, 0],
-            '吟霖': [-1, 0],
-            '相里要': [-1, 0],
-            '奥古斯特': [-1, 0],
-            '忌炎': [-1, 0],
-            '夏空': [-1, 0],
-            '卡提希娅': [-1, 0],
-            '尤诺': [-1, 0],
-            '今汐': [-1, 0],
-            '守岸人': [-1, 0],
-            '菲比': [-1, 0],
-            '赞妮': [-1, 0],
-            '椿': [-1, 0],
-            '洛可可': [-1, 0],
-            '坎特蕾拉': [-1, 0],
-            '弗洛洛': [-1, 0],
+            self.rate_up_5star: [-1, 0]
         }
-        self.rate_up_5star = '弗洛洛'
-        self.pity_4star = 0
         self._4stars = {
             '散华': [4, 0],
             '白芷': [-1, 0],
@@ -183,6 +167,43 @@ class GachaSimulator:
             '卜灵': [-1, 0]
         }
         self.rate_up_4stars = ['炽霞', '丹瑾', '卜灵']
+
+        # 尝试加载配置文件
+        config_path = 'gacha_config.json'
+        config_data = None
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = json.load(f)
+            except Exception as e:
+                print(f"加载配置文件失败: {e}，将使用默认配置。")
+
+        if config_data:
+            # 从配置加载并覆盖默认值
+            if 'rate_up_4stars' in config_data:
+                self.rate_up_4stars = config_data['rate_up_4stars']
+            
+            # 如果配置中有 standard_5stars，则更新
+            if 'standard_5stars' in config_data:
+                # 兼容字典或列表格式
+                if isinstance(config_data['standard_5stars'], dict):
+                    for k, v in config_data['standard_5stars'].items():
+                        self.standard_5stars[k] = [v, 0]
+                else:
+                    for name in config_data['standard_5stars']:
+                        self.standard_5stars[name] = [-1, 0]
+                
+            # 如果配置中有 4stars，则更新
+            if '4stars' in config_data:
+                # 兼容字典或列表格式
+                if isinstance(config_data['4stars'], dict):
+                    for k, v in config_data['4stars'].items():
+                        self._4stars[k] = [v, 0]
+                else:
+                    for name in config_data['4stars']:
+                        self._4stars[name] = [-1, 0]
+
+        self.pity_4star = 0
 
         # 武器池初始化
         self.pity_5star_weapon = self.initial_pity_weapon
@@ -457,15 +478,15 @@ class GachaSimulator:
                 self._4stars[char] = [-1, 0]
 
 @njit
-def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains):
+def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains):
     # 局部变量初始化
     pity_5 = initial_pity_5star
     pity_4 = 0
     
     # 角色池状态
     featured_chain = -1
-    # standard_chains: 5个常驻角色，初始-1
-    standard_chains = np.full(5, -1, dtype=np.int8)
+    # standard_chains: 5个常驻角色
+    standard_chains = initial_standard_chains.copy()
     # four_star_chains: 12个四星角色。前3个为UP，后9个为非UP
     four_star_chains = initial_four_star_chains.copy()
     
@@ -619,7 +640,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     return pull_count, coral, oscillated_coral, gained_coral, exchanged_num
 
 @njit(parallel=True)
-def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains):
+def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains):
     # Pre-allocate arrays
     pulls_count_arr = np.zeros(n, dtype=np.int32)
     remaining_afterglow_arr = np.zeros(n, dtype=np.int32)
@@ -628,7 +649,7 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
     exchanged_chains_arr = np.zeros(n, dtype=np.int32)
 
     for i in prange(n):
-        res = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains)
+        res = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains)
         pulls_count_arr[i] = res[0]
         remaining_afterglow_arr[i] = res[1]
         remaining_oscillated_arr[i] = res[2]
@@ -712,6 +733,14 @@ if __name__ == '__main__':
     for i, char_name in enumerate(non_up_chars):
         initial_four_star_chains[3 + i] = sim._4stars[char_name][0]
 
+    # 获取初始常驻五星链数 (按字典序或固定顺序，需与 run_single_simulation 内部逻辑一致)
+    # 在 run_single_simulation 中，我们用 idx = int(random.random() * 5) 随机选择
+    # 因此这里只需要传入一个长度为5的数组，顺序并不重要，只要每次随机选一个即可
+    # 但为了严谨，我们按 keys 的顺序传入
+    initial_standard_chains = np.zeros(5, dtype=np.int8)
+    for i, char_name in enumerate(sim.standard_5stars.keys()):
+        initial_standard_chains[i] = sim.standard_5stars[char_name][0]
+
     # 模拟次数
     n = 1000000
     
@@ -723,7 +752,7 @@ if __name__ == '__main__':
     import time
     t0 = time.time()
     pulls_count_list, remaining_afterglow_list, remaining_oscillated_list, gained_afterglow_list, exchanged_chains_list = run_simulations_parallel(
-        n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains
+        n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains
     )
     t1 = time.time()
     print(f"模拟完成，耗时: {t1 - t0:.4f}s")
@@ -755,7 +784,11 @@ if __name__ == '__main__':
     is_all_4star_full = np.all(initial_four_star_chains >= 6)
     coral_per_4star = 8 if is_all_4star_full else 3
 
-    needed_copies = target_chain + 1
+    # 计算还需要抽取的角色数量
+    # 假设初始为-1 (未拥有)
+    current_copies = 0 
+    target_copies = target_chain + 1
+    needed_copies = max(0, target_copies - current_copies)
     
     # 武器池最大抽数
     max_weapon_pulls = target_weapon * 79 - initial_pity_weapon
@@ -765,13 +798,11 @@ if __name__ == '__main__':
     weapon_coral = target_weapon * 15 + (max_weapon_pulls // 10) * coral_per_4star
 
     # 角色池最差情况分析
-    # 必须先抽 1 只解锁兑换 (除非 needed_copies <= 0)
-    # 第一只的最大抽数
     first_char_pulls = 0
     first_char_coral = 0
-    
     remaining_copies = needed_copies
-    
+
+    # 如果尚未拥有角色且需要抽取，则必须先抽 1 只解锁兑换
     if needed_copies > 0:
         # 计算第1只的代价
         if initial_guaranteed:
