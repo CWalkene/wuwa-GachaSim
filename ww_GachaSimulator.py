@@ -25,11 +25,11 @@ OUTCOME_5_STAR_UP = 52
 OUTCOME_5_STAR_STANDARD = 51
 
 @njit
-def core_pull(pity_5, pity_4, is_guaranteed, banner_type):
+def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type):
     """
     核心抽卡逻辑 (Numba加速)
     banner_type: 0-角色池, 1-武器池
-    返回: (outcome_type, new_pity_5, new_pity_4, new_is_guaranteed)
+    返回: (outcome_type, new_pity_5, new_pity_4, new_is_guaranteed, new_is_4star_guaranteed)
     """
     r = random.random()
     
@@ -47,15 +47,15 @@ def core_pull(pity_5, pity_4, is_guaranteed, banner_type):
         
         if banner_type == 1:
             # 武器池：必定UP
-            return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, is_guaranteed
+            return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, is_4star_guaranteed
         else:
             # 角色池
             if not is_guaranteed and random.random() < 0.5:
                 # 歪常驻
-                return OUTCOME_5_STAR_STANDARD, new_pity_5, new_pity_4, True
+                return OUTCOME_5_STAR_STANDARD, new_pity_5, new_pity_4, True, is_4star_guaranteed
             else:
                 # 中UP
-                return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, False
+                return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, False, is_4star_guaranteed
 
     # 检查四星
     current_pity_4 = pity_4 + 1
@@ -68,13 +68,24 @@ def core_pull(pity_5, pity_4, is_guaranteed, banner_type):
         new_pity_4 = 0
         new_pity_5 = pity_5 + 1
         
-        if random.random() < 0.5:
-            return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed
+        if banner_type == 0:
+            # 角色池：应用4星保底逻辑
+            if is_4star_guaranteed:
+                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
+            else:
+                if random.random() < 0.5:
+                    return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, True
+                else:
+                    return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
         else:
-            return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed
+            # 武器池：保持原样 (50/50)，不改变传入的 is_4star_guaranteed 状态
+            if random.random() < 0.5:
+                return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, is_4star_guaranteed
+            else:
+                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, is_4star_guaranteed
             
     # 三星
-    return OUTCOME_3_STAR, pity_5 + 1, pity_4 + 1, is_guaranteed
+    return OUTCOME_3_STAR, pity_5 + 1, pity_4 + 1, is_guaranteed, is_4star_guaranteed
 
 class GachaSimulator:
     def __init__(self, initial_guaranteed=False, initial_coral=0, initial_pity_5star=0, initial_pity_weapon=0):
@@ -86,6 +97,8 @@ class GachaSimulator:
 
         # 五星限定角色是否保底
         self.featured_5star_guaranteed = False
+        # 四星限定角色是否保底
+        self.featured_4star_guaranteed = False
         # 距上个五星的抽数
         self.pity_5star = 0
         # 常驻池五星角色及已有数、抽到数：'角色名': [链数, 抽到]
@@ -122,6 +135,7 @@ class GachaSimulator:
         重置所有状态到初始值
         """
         self.featured_5star_guaranteed = self.initial_guaranteed
+        self.featured_4star_guaranteed = False
         self.pity_5star = self.initial_pity_5star
         self.standard_5stars = {
             '凌阳': [-1, 0],
@@ -206,8 +220,8 @@ class GachaSimulator:
         local_obtained_oscillated_coral = 0
 
         # 调用核心逻辑
-        outcome, self.pity_5star, self.pity_4star, self.featured_5star_guaranteed = core_pull(
-            self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, 0
+        outcome, self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, self.featured_4star_guaranteed = core_pull(
+            self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, self.featured_4star_guaranteed, 0
         )
 
         if outcome == OUTCOME_5_STAR_UP:
@@ -291,8 +305,9 @@ class GachaSimulator:
 
         # 调用核心逻辑 (banner_type=1)
         # 注意：武器池没有“大保底”概念，is_guaranteed传False即可，返回值忽略
-        outcome, self.pity_5star_weapon, self.pity_4star_weapon, _ = core_pull(
-            self.pity_5star_weapon, self.pity_4star_weapon, False, 1
+        # 武器池也不使用角色池的4星保底，传入False，返回值忽略
+        outcome, self.pity_5star_weapon, self.pity_4star_weapon, _, _ = core_pull(
+            self.pity_5star_weapon, self.pity_4star_weapon, False, False, 1
         )
 
         if outcome == OUTCOME_5_STAR_UP:
@@ -380,7 +395,8 @@ class GachaSimulator:
         return {
             'pity_5star': self.pity_5star,
             'pity_4star': self.pity_4star,
-            'featured_5star_guaranteed': self.featured_5star_guaranteed
+            'featured_5star_guaranteed': self.featured_5star_guaranteed,
+            'featured_4star_guaranteed': self.featured_4star_guaranteed
         }
 
     def get_character_stats(self):
@@ -466,12 +482,13 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     exchanged_num = 0
     
     is_guaranteed = initial_guaranteed
+    is_4star_guaranteed = False
     
     # 1. 确保拥有角色 (0链)
     if target_chain >= 0 and featured_chain < 0:
         while featured_chain < 0:
             pull_count += 1
-            outcome, pity_5, pity_4, is_guaranteed = core_pull(pity_5, pity_4, is_guaranteed, 0)
+            outcome, pity_5, pity_4, is_guaranteed, is_4star_guaranteed = core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, 0)
             
             if outcome == OUTCOME_5_STAR_UP:
                 if featured_chain < 7: 
@@ -514,7 +531,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     # 2. 抽武器
     while featured_weapon_count < target_weapon:
         pull_count += 1
-        outcome, pity_5_weapon, pity_4_weapon, _ = core_pull(pity_5_weapon, pity_4_weapon, False, 1)
+        outcome, pity_5_weapon, pity_4_weapon, _, _ = core_pull(pity_5_weapon, pity_4_weapon, False, False, 1)
         
         if outcome == OUTCOME_5_STAR_UP:
             featured_weapon_count += 1
@@ -559,7 +576,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 continue
         
         pull_count += 1
-        outcome, pity_5, pity_4, is_guaranteed = core_pull(pity_5, pity_4, is_guaranteed, 0)
+        outcome, pity_5, pity_4, is_guaranteed, is_4star_guaranteed = core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, 0)
         
         if outcome == OUTCOME_5_STAR_UP:
             if featured_chain < 7:
