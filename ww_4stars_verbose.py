@@ -173,8 +173,11 @@ class GachaSimulator:
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config_data = json.load(f)
+                print(f"成功加载配置文件: {config_path}")
             except Exception as e:
                 print(f"加载配置文件失败: {e}，将使用默认配置。")
+        else:
+            print(f"配置文件不存在: {config_path}，将使用默认配置。")
 
         if config_data:
             # 从配置加载并覆盖默认值
@@ -336,10 +339,21 @@ class GachaSimulator:
             # 假设重复获得五星武器给15余波珊瑚
             local_obtained_afterglow_coral = 15
 
-        elif outcome == OUTCOME_4_STAR_WEAPON:
-            # 武器池四星：从所有四星中随机选择
-            all_4stars = list(self._4stars.keys())
-            local_item = random.choice(all_4stars)
+        elif outcome == OUTCOME_4_STAR_UP:
+            # 抽到概率up四星
+            local_item = random.choice(self.rate_up_4stars)
+            if self._4stars[local_item][0] < 6:
+                self._4stars[local_item][0] += 1
+                self._4stars[local_item][1] += 1
+                local_obtained_afterglow_coral = 3
+            else:
+                self._4stars[local_item][1] += 1
+                local_obtained_afterglow_coral = 8
+
+        elif outcome == OUTCOME_4_STAR_OTHER:
+            # 抽到非概率up四星
+            local_non_rate_up_4stars = [c for c in self._4stars if c not in self.rate_up_4stars]
+            local_item = random.choice(local_non_rate_up_4stars)
             if self._4stars[local_item][0] < 6:
                 self._4stars[local_item][0] += 1
                 self._4stars[local_item][1] += 1
@@ -477,6 +491,9 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     # four_star_chains: 12个四星角色。前3个为UP，后9个为非UP
     four_star_chains = initial_four_star_chains.copy()
     
+    # 统计四星获取情况
+    four_star_obtained = np.zeros(12, dtype=np.int32)
+    
     # 武器池状态
     pity_5_weapon = initial_pity_weapon
     pity_4_weapon = 0
@@ -517,6 +534,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 gained_coral += c
             elif outcome == OUTCOME_4_STAR_UP:
                 idx = int(random.random() * 3)
+                four_star_obtained[idx] += 1
                 if four_star_chains[idx] < 6:
                     four_star_chains[idx] += 1
                     c = 3
@@ -526,6 +544,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 gained_coral += c
             elif outcome == OUTCOME_4_STAR_OTHER:
                 idx = 3 + int(random.random() * 9)
+                four_star_obtained[idx] += 1
                 if four_star_chains[idx] < 6:
                     four_star_chains[idx] += 1
                     c = 3
@@ -546,17 +565,10 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             c = 15
             coral += c
             gained_coral += c
-        elif outcome == OUTCOME_4_STAR_UP:
-            idx = int(random.random() * 3)
-            if four_star_chains[idx] < 6:
-                four_star_chains[idx] += 1
-                c = 3
-            else:
-                c = 8
-            coral += c
-            gained_coral += c
-        elif outcome == OUTCOME_4_STAR_OTHER:
-            idx = 3 + int(random.random() * 9)
+        elif outcome == OUTCOME_4_STAR_WEAPON:
+            # 武器池四星：从所有12个四星中随机选择
+            idx = int(random.random() * 12)
+            four_star_obtained[idx] += 1
             if four_star_chains[idx] < 6:
                 four_star_chains[idx] += 1
                 c = 3
@@ -605,6 +617,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             gained_coral += c
         elif outcome == OUTCOME_4_STAR_UP:
             idx = int(random.random() * 3)
+            four_star_obtained[idx] += 1
             if four_star_chains[idx] < 6:
                 four_star_chains[idx] += 1
                 c = 3
@@ -614,6 +627,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             gained_coral += c
         elif outcome == OUTCOME_4_STAR_OTHER:
             idx = 3 + int(random.random() * 9)
+            four_star_obtained[idx] += 1
             if four_star_chains[idx] < 6:
                 four_star_chains[idx] += 1
                 c = 3
@@ -624,7 +638,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
         else: # 3 Star
             oscillated_coral += 15
     
-    return pull_count, coral, oscillated_coral, gained_coral, exchanged_num
+    return pull_count, coral, oscillated_coral, gained_coral, exchanged_num, four_star_obtained, four_star_chains
 
 @njit(parallel=True)
 def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains):
@@ -634,6 +648,10 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
     remaining_oscillated_arr = np.zeros(n, dtype=np.int32)
     gained_afterglow_arr = np.zeros(n, dtype=np.int32)
     exchanged_chains_arr = np.zeros(n, dtype=np.int32)
+    
+    # 4-star stats arrays
+    all_4star_obtained = np.zeros((n, 12), dtype=np.int32)
+    all_4star_chains = np.zeros((n, 12), dtype=np.int32)
 
     for i in prange(n):
         res = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains)
@@ -642,8 +660,10 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
         remaining_oscillated_arr[i] = res[2]
         gained_afterglow_arr[i] = res[3]
         exchanged_chains_arr[i] = res[4]
+        all_4star_obtained[i] = res[5]
+        all_4star_chains[i] = res[6]
 
-    return pulls_count_arr, remaining_afterglow_arr, remaining_oscillated_arr, gained_afterglow_arr, exchanged_chains_arr
+    return pulls_count_arr, remaining_afterglow_arr, remaining_oscillated_arr, gained_afterglow_arr, exchanged_chains_arr, all_4star_obtained, all_4star_chains
 
 if __name__ == '__main__':
     # 获取用户输入的目标链数
@@ -738,7 +758,7 @@ if __name__ == '__main__':
     # 注意：第一次运行会包含编译时间
     import time
     t0 = time.time()
-    pulls_count_list, remaining_afterglow_list, remaining_oscillated_list, gained_afterglow_list, exchanged_chains_list = run_simulations_parallel(
+    pulls_count_list, remaining_afterglow_list, remaining_oscillated_list, gained_afterglow_list, exchanged_chains_list, all_4star_obtained, all_4star_chains = run_simulations_parallel(
         n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains
     )
     t1 = time.time()
@@ -748,6 +768,21 @@ if __name__ == '__main__':
     average_gained_afterglow = np.mean(gained_afterglow_list)
     average_exchanged_chains = np.mean(exchanged_chains_list)
     average_total_before_exchange = initial_coral + average_gained_afterglow
+
+    # 计算四星统计数据
+    avg_4star_obtained = np.mean(all_4star_obtained, axis=0)
+    avg_4star_chains = np.mean(all_4star_chains, axis=0)
+    
+    # 重建四星名字列表以对应索引
+    four_star_names = list(sim.rate_up_4stars) + [c for c in sim._4stars if c not in sim.rate_up_4stars]
+
+    print("\n" + "="*45)
+    print("四星角色统计 (平均值)")
+    print(f"{'角色名':<10} {'初始链数':<10} {'获取数量':<10} {'最终链数':<10}")
+    print("-" * 45)
+    for i, name in enumerate(four_star_names):
+        print(f"{name:<10} {initial_four_star_chains[i]:<10} {avg_4star_obtained[i]:<10.2f} {avg_4star_chains[i]:<10.2f}")
+    print("="*45 + "\n")
 
     # 计算余波珊瑚众数
     vals_afterglow, counts_afterglow = np.unique(remaining_afterglow_list, return_counts=True)
