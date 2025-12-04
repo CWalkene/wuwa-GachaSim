@@ -551,7 +551,7 @@ class GachaSimulator:
                 self._4stars[char] = [-1, 0]
 
 @njit(fastmath=True)
-def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains):
+def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, four_star_chains):
     """
     运行单次完整的抽卡模拟 (Numba 加速)
 
@@ -569,6 +569,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
         target_weapon (int): 目标武器数量 (1-5)
         initial_four_star_chains (int[:]): 初始四星角色链数数组
         initial_standard_chains (int[:]): 初始常驻五星链数数组
+        four_star_chains (int[:]): 输出参数，用于存储最终四星角色链数
 
     返回:
         int: pull_count (总抽数)
@@ -583,7 +584,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     standard_chains = np.empty(5, dtype=np.int8)
     for i in range(5): standard_chains[i] = initial_standard_chains[i]
     
-    four_star_chains = np.empty(12, dtype=np.int8)
+    # four_star_chains passed as argument
     for i in range(12): four_star_chains[i] = initial_four_star_chains[i]
     
     # 武器池状态
@@ -917,17 +918,18 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
         initial_standard_chains (int[:]): 初始常驻五星链数数组
 
     返回:
-        int[:]: pulls_count_arr (每次模拟的总抽数数组)
+        tuple: (pulls_count_arr, final_chains_arr)
     """
     # 预分配数组 (使用empty避免初始化开销)
     pulls_count_arr = np.empty(n, dtype=np.int32)
+    final_chains_arr = np.empty((n, 12), dtype=np.int8)
 
     # 并行循环执行模拟
     for i in prange(n):
-        res = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains)
-        pulls_count_arr[i] = res
+        res_pulls = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, final_chains_arr[i])
+        pulls_count_arr[i] = res_pulls
 
-    return pulls_count_arr
+    return pulls_count_arr, final_chains_arr
 
 if __name__ == '__main__':
     # --- 获取用户输入 ---
@@ -1022,11 +1024,69 @@ if __name__ == '__main__':
     # 注意：第一次运行会包含编译时间
     import time
     t0 = time.time()
-    pulls_count_list = run_simulations_parallel(
+    pulls_count_list, final_chains_list = run_simulations_parallel(
         n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains
     )
     t1 = time.time()
     print(f"模拟完成，耗时: {t1 - t0:.4f}s")
+
+    # --- 统计四星角色数据 ---
+    # 重构四星角色名称列表 (对应索引 0-11)
+    four_star_names = []
+    # 0-2: UP 4 stars
+    four_star_names.extend(sim.rate_up_4stars)
+    # 3-11: Non-UP 4 stars
+    non_up_chars = [c for c in sim._4stars if c not in sim.rate_up_4stars]
+    four_star_names.extend(non_up_chars)
+
+    # 计算平均值
+    avg_final_chains = np.mean(final_chains_list, axis=0)
+    avg_obtained = avg_final_chains - initial_four_star_chains
+
+    # 辅助函数：计算字符串显示宽度 (中文字符计为2)
+    def get_str_width(s):
+        w = 0
+        for c in s:
+            if '\u4e00' <= c <= '\u9fff':
+                w += 2
+            else:
+                w += 1
+        return w
+
+    def print_row(c1, c2, c3, c4):
+        # 定义列宽
+        w1, w2, w3, w4 = 14, 14, 16, 16
+        
+        s1 = str(c1) + ' ' * max(0, w1 - get_str_width(str(c1)))
+        s2 = str(c2) + ' ' * max(0, w2 - get_str_width(str(c2)))
+        s3 = str(c3) + ' ' * max(0, w3 - get_str_width(str(c3)))
+        s4 = str(c4) + ' ' * max(0, w4 - get_str_width(str(c4)))
+        
+        print(f"{s1} | {s2} | {s3} | {s4}")
+
+    print("\n" + "="*68)
+    print(f"{'四星角色统计 (平均值)':^60}")
+    print("="*68)
+    print_row('角色名', '初始链数', '平均获得数', '平均最终链数')
+    print("-" * 68)
+    
+    for i, name in enumerate(four_star_names):
+        init_c = initial_four_star_chains[i]
+        avg_get = avg_obtained[i]
+        avg_final = avg_final_chains[i]
+        
+        # 标记UP角色
+        if i < 3:
+            name_display = f"*{name}"
+        else:
+            name_display = f" {name}"
+            
+        # 格式化输出
+        # 初始链数如果是 -1 (未拥有)，显示 "未拥有" 或 -1
+        init_str = str(init_c) if init_c >= 0 else "未拥有"
+        
+        print_row(name_display, init_str, f"{avg_get:.1f}", f"{avg_final:.1f}")
+    print("-" * 68)
 
     average = np.mean(pulls_count_list)
 
