@@ -835,13 +835,23 @@ if __name__ == '__main__':
     # 重建四星名字列表以对应索引
     four_star_names = list(sim.rate_up_4stars) + [c for c in sim._4stars if c not in sim.rate_up_4stars]
 
-    print("\n" + "="*45)
-    print("四星角色统计 (平均值)")
-    print(f"{'角色名':<10} {'初始链数':<10} {'获取数量':<10} {'最终链数':<10}")
-    print("-" * 45)
+    print("\n" + "="*55)
+    print(f"{'四星角色统计 (平均值)':^55}")
+    print("-" * 55)
+    
+    def print_row(c1, c2, c3, c4):
+        s1, s2, s3, s4 = str(c1), str(c2), str(c3), str(c4)
+        # 使用GBK编码长度近似字符显示宽度 (汉字2, 英文1)
+        l1 = len(s1.encode('gbk'))
+        l2 = len(s2.encode('gbk'))
+        l3 = len(s3.encode('gbk'))
+        print(f"{s1}{' '*(14-l1)}{s2}{' '*(12-l2)}{s3}{' '*(14-l3)}{s4}")
+
+    print_row('角色名', '初始链数', '获取数量', '最终链数')
+    print("-" * 55)
     for i, name in enumerate(four_star_names):
-        print(f"{name:<10} {initial_four_star_chains[i]:<10} {avg_4star_obtained[i]:<10.2f} {avg_4star_chains[i]:<10.2f}")
-    print("="*45 + "\n")
+        print_row(name, initial_four_star_chains[i], f"{avg_4star_obtained[i]:.1f}", f"{avg_4star_chains[i]:.1f}")
+    print("="*55 + "\n")
 
     # 计算余波珊瑚众数
     vals_afterglow, counts_afterglow = np.unique(remaining_afterglow_list, return_counts=True)
