@@ -925,8 +925,6 @@ if __name__ == '__main__':
             )
         )
 
-        # 5. 直接展示 (不生成本地文件)
-        print("\n[提示] 正在生成交互式图表，请稍候...")
         # config 配置：开启滚轮缩放，隐藏 Plotly logo，开启响应式
         fig.show(config={
             'scrollZoom': True, 
