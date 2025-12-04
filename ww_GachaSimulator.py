@@ -440,14 +440,13 @@ class GachaSimulator:
 
         return local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral
 
-    def simulate_pulls(self, num_pulls: int, banner_type: str = 'character', verbose: bool = False):
+    def simulate_pulls(self, num_pulls: int, banner_type: str = 'character'):
         """
         模拟多次抽卡过程
 
         参数:
             num_pulls (int): 抽卡次数
             banner_type (str): 卡池类型 'character' (角色池) 或 'weapon' (武器池)
-            verbose (bool): 是否打印每次抽卡结果
         """
         # 执行指定次数抽卡
         for pull in range(num_pulls):
@@ -462,20 +461,6 @@ class GachaSimulator:
             self.total_afterglow_coral_count += local_obtained_afterglow_coral
             self.gained_afterglow_coral_count += local_obtained_afterglow_coral
             self.total_oscillated_coral_count += local_obtained_oscillated_coral
-
-            if verbose:
-                # verbose为True，输出抽卡结果
-                if local_obtained_afterglow_coral > 8:
-                    print(f'第{self.pull_count}抽：获得\033[33m{local_item:-^10}\033[0m和'
-                          f'{local_obtained_afterglow_coral}余波珊瑚。')
-                elif local_obtained_afterglow_coral > 0:
-                    print(f'第{self.pull_count}抽：获得\033[35m{local_item:-^10}\033[0m和'
-                          f'{local_obtained_afterglow_coral}余波珊瑚。')
-                elif local_obtained_oscillated_coral > 0:
-                    print(f'第{self.pull_count}抽：获得{local_item:-^10}和{local_obtained_oscillated_coral}残振珊瑚。')
-                else:
-                    # 正常情况下此种情况不存在
-                    print(f'第{self.pull_count}抽：获得{local_item:-^10}。')
 
     def get_pity_info(self):
         """
