@@ -449,14 +449,14 @@ class GachaSimulator:
             banner_type (str): 卡池类型 'character' (角色池) 或 'weapon' (武器池)
         """
         # 执行指定次数抽卡
-        for pull in range(num_pulls):
+        for _ in range(num_pulls):
             # 总抽数更新
             self.pull_count += 1
             # 执行一次抽卡，获得抽取物、珊瑚
             if banner_type == 'weapon':
-                local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral = self.pull_weapon()
+                _, local_obtained_afterglow_coral, local_obtained_oscillated_coral = self.pull_weapon()
             else:
-                local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral = self.pull()
+                _, local_obtained_afterglow_coral, local_obtained_oscillated_coral = self.pull()
             
             self.total_afterglow_coral_count += local_obtained_afterglow_coral
             self.gained_afterglow_coral_count += local_obtained_afterglow_coral
@@ -1148,7 +1148,7 @@ if __name__ == '__main__':
         # 尝试换2个
         # 需要抽 remaining_copies - 2 个
         rem = remaining_copies - 2
-        p, c = calc_rest_cost(rem)
+        _, c = calc_rest_cost(rem)
         if base_coral + c >= 720:
             exchangeable = 2
         else:
@@ -1157,7 +1157,7 @@ if __name__ == '__main__':
     if max_ex == 1 and exchangeable == 0:
         # 尝试换1个
         rem = remaining_copies - 1
-        p, c = calc_rest_cost(rem)
+        _, c = calc_rest_cost(rem)
         if base_coral + c >= 360:
             exchangeable = 1
             
