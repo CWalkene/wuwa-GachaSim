@@ -536,7 +536,7 @@ class GachaSimulator:
                 self._4stars[char] = [-1, 0]
 
 @njit(fastmath=True)
-def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, four_star_chains):
+def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, four_star_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total):
     """
     运行单次完整的抽卡模拟 (Numba 加速)
 
@@ -555,6 +555,10 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
         initial_four_star_chains (int[:]): 初始四星角色链数数组
         initial_standard_chains (int[:]): 初始常驻五星链数数组
         four_star_chains (int[:]): 输出参数，用于存储最终四星角色链数
+        num_up_4stars (int): 当期UP四星角色数量
+        num_total_4stars (int): 四星角色总数量
+        char_pool_other_total (int): 角色池非UP四星池总大小 (非UP角色数 + 武器数)
+        weapon_pool_other_total (int): 武器池非UP四星池总大小 (所有角色数 + 武器数)
 
     返回:
         int: pull_count (总抽数)
@@ -570,7 +574,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     for i in range(5): standard_chains[i] = initial_standard_chains[i]
     
     # four_star_chains passed as argument
-    for i in range(12): four_star_chains[i] = initial_four_star_chains[i]
+    for i in range(num_total_4stars): four_star_chains[i] = initial_four_star_chains[i]
     
     # 武器池状态
     pity_5_weapon = initial_pity_weapon
@@ -668,10 +672,10 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                     is_4star_guaranteed = True
                 
                 if is_up_4:
-                    # UP 4星 (3个)
+                    # UP 4星
                     r_up4 = random.random()
-                    idx = int(r_up4 * 3)
-                    if idx >= 3: idx = 2
+                    idx = int(r_up4 * num_up_4stars)
+                    if idx >= num_up_4stars: idx = num_up_4stars - 1
                     if four_star_chains[idx] < 6:
                         four_star_chains[idx] += 1
                         c = 3
@@ -679,12 +683,13 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                         c = 8
                     coral += c
                 else:
-                    # 其他 4星 (9角色 + 20武器 = 29)
+                    # 其他 4星
                     r_other4 = random.random()
-                    val = r_other4 * 29
-                    if val < 9:
-                        idx = 3 + int(val)
-                        if idx >= 12: idx = 11
+                    val = r_other4 * char_pool_other_total
+                    char_pool_other_chars = num_total_4stars - num_up_4stars
+                    if val < char_pool_other_chars:
+                        idx = num_up_4stars + int(val)
+                        if idx >= num_total_4stars: idx = num_total_4stars - 1
                         if four_star_chains[idx] < 6:
                             four_star_chains[idx] += 1
                             c = 3
@@ -749,12 +754,12 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 c = 3
                 coral += c
             else:
-                # 其他: 12个角色 + 17把武器 = 29
+                # 其他
                 r_other4 = random.random()
-                val = r_other4 * 29
-                if val < 12:
+                val = r_other4 * weapon_pool_other_total
+                if val < num_total_4stars:
                     idx = int(val)
-                    if idx >= 12: idx = 11
+                    if idx >= num_total_4stars: idx = num_total_4stars - 1
                     if four_star_chains[idx] < 6:
                         four_star_chains[idx] += 1
                         c = 3
@@ -855,8 +860,8 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             
             if is_up_4:
                 r_up4 = random.random()
-                idx = int(r_up4 * 3)
-                if idx >= 3: idx = 2
+                idx = int(r_up4 * num_up_4stars)
+                if idx >= num_up_4stars: idx = num_up_4stars - 1
                 if four_star_chains[idx] < 6:
                     four_star_chains[idx] += 1
                     c = 3
@@ -865,10 +870,11 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 coral += c
             else:
                 r_other4 = random.random()
-                val = r_other4 * 29
-                if val < 9:
-                    idx = 3 + int(val)
-                    if idx >= 12: idx = 11
+                val = r_other4 * char_pool_other_total
+                char_pool_other_chars = num_total_4stars - num_up_4stars
+                if val < char_pool_other_chars:
+                    idx = num_up_4stars + int(val)
+                    if idx >= num_total_4stars: idx = num_total_4stars - 1
                     if four_star_chains[idx] < 6:
                         four_star_chains[idx] += 1
                         c = 3
@@ -887,7 +893,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     return pull_count
 
 @njit(parallel=True, fastmath=True)
-def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains):
+def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total):
     """
     并行执行多次抽卡模拟 (使用 Numba parallel 加速)
 
@@ -901,17 +907,21 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
         target_weapon (int): 目标武器数量
         initial_four_star_chains (int[:]): 初始四星角色链数数组
         initial_standard_chains (int[:]): 初始常驻五星链数数组
+        num_up_4stars (int): 当期UP四星角色数量
+        num_total_4stars (int): 四星角色总数量
+        char_pool_other_total (int): 角色池非UP四星池总大小
+        weapon_pool_other_total (int): 武器池非UP四星池总大小
 
     返回:
         tuple: (pulls_count_arr, final_chains_arr)
     """
     # 预分配数组 (使用empty避免初始化开销)
     pulls_count_arr = np.empty(n, dtype=np.int32)
-    final_chains_arr = np.empty((n, 12), dtype=np.int8)
+    final_chains_arr = np.empty((n, num_total_4stars), dtype=np.int8)
 
     # 并行循环执行模拟
     for i in prange(n):
-        res_pulls = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, final_chains_arr[i])
+        res_pulls = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, final_chains_arr[i], num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total)
         pulls_count_arr[i] = res_pulls
 
     return pulls_count_arr, final_chains_arr
@@ -980,16 +990,27 @@ if __name__ == '__main__':
 
     # 获取初始四星状态 (从GachaSimulator类中读取)
     sim = GachaSimulator()
-    initial_four_star_chains = np.zeros(12, dtype=np.int8)
     
-    # 映射UP四星 (索引0-2)
+    # 动态计算四星池参数
+    total_4stars_count = len(sim._4stars)
+    up_4stars_count = len(sim.rate_up_4stars)
+    non_up_4stars_count = total_4stars_count - up_4stars_count
+    
+    # 角色池非UP四星池总大小 (非UP角色数 + 20把武器)
+    char_pool_non_up_total_count = non_up_4stars_count + 20
+    # 武器池非UP四星池总大小 (所有角色数 + 17把武器)
+    weapon_pool_non_up_total_count = total_4stars_count + 17
+
+    initial_four_star_chains = np.zeros(total_4stars_count, dtype=np.int8)
+    
+    # 映射UP四星 (索引 0 ~ up_4stars_count-1)
     for i, char_name in enumerate(sim.rate_up_4stars):
         initial_four_star_chains[i] = sim._4stars[char_name][0]
         
-    # 映射非UP四星 (索引3-11)
+    # 映射非UP四星 (索引 up_4stars_count ~ total_4stars_count-1)
     non_up_chars = [c for c in sim._4stars if c not in sim.rate_up_4stars]
     for i, char_name in enumerate(non_up_chars):
-        initial_four_star_chains[3 + i] = sim._4stars[char_name][0]
+        initial_four_star_chains[up_4stars_count + i] = sim._4stars[char_name][0]
 
     # 获取初始常驻五星链数 (按字典序或固定顺序，需与 run_single_simulation 内部逻辑一致)
     # 在 run_single_simulation 中，我们用 idx = int(random.random() * 5) 随机选择
@@ -1010,7 +1031,8 @@ if __name__ == '__main__':
     import time
     t0 = time.time()
     pulls_count_list, final_chains_list = run_simulations_parallel(
-        n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains
+        n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains,
+        up_4stars_count, total_4stars_count, char_pool_non_up_total_count, weapon_pool_non_up_total_count
     )
     t1 = time.time()
     print(f"模拟完成，耗时: {t1 - t0:.4f}s")
@@ -1061,7 +1083,7 @@ if __name__ == '__main__':
         avg_final = avg_final_chains[i]
         
         # 标记UP角色
-        if i < 3:
+        if i < up_4stars_count:
             name_display = f"*{name}"
         else:
             name_display = f" {name}"
