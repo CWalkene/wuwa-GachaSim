@@ -996,34 +996,38 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
 
 if __name__ == '__main__':
     # --- 获取用户输入 ---
-    try:
-        target_chain_input = input("请输入想要获取的限定五星角色链数：")
-        if not target_chain_input.strip():
-            print("未输入，默认计算0链。")
-            target_chain = 0
-        else:
-            target_chain = int(target_chain_input)
-            if target_chain < 0 or target_chain > 6:
-                print("输入错误，链数必须在0到6之间。")
-                exit()
-    except ValueError:
-        print("输入错误，请输入整数。")
-        exit()
+    while True:
+        try:
+            target_chain_input = input("请输入想要获取的限定五星角色链数：")
+            if not target_chain_input.strip():
+                print("未输入，默认计算0链。")
+                target_chain = 0
+                break
+            else:
+                target_chain = int(target_chain_input)
+                if target_chain < 0 or target_chain > 6:
+                    print("输入错误，链数必须在0到6之间。")
+                    continue
+                break
+        except ValueError:
+            print("输入错误，请输入整数。")
 
     # 获取用户输入的目标专武数量
-    try:
-        target_weapon_input = input("请输入想要获取的限定五星专武数量：")
-        if not target_weapon_input.strip():
-            print("未输入，默认计算0把。")
-            target_weapon = 0
-        else:
-            target_weapon = int(target_weapon_input)
-            if target_weapon < 0 or target_weapon > 5:
-                print("输入错误，数量必须在0到5之间。")
-                exit()
-    except ValueError:
-        print("输入错误，请输入整数。")
-        exit()
+    while True:
+        try:
+            target_weapon_input = input("请输入想要获取的限定五星专武数量：")
+            if not target_weapon_input.strip():
+                print("未输入，默认计算0把。")
+                target_weapon = 0
+                break
+            else:
+                target_weapon = int(target_weapon_input)
+                if target_weapon < 0 or target_weapon > 5:
+                    print("输入错误，数量必须在0到5之间。")
+                    continue
+                break
+        except ValueError:
+            print("输入错误，请输入整数。")
 
     # 获取用户输入的初始状态
     guaranteed_input = input("下一个五星是否大保底 (y/n): ")
