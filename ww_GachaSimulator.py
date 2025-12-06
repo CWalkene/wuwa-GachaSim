@@ -47,11 +47,11 @@ OUTCOME_4_STAR_WEAPON = 43   # 四星武器 (未使用)
 OUTCOME_5_STAR_UP = 52       # 当期UP五星
 OUTCOME_5_STAR_STANDARD = 51 # 常驻五星
 
-@njit(inline='always')
+@njit(inline='always', cache=True)
 def rotl(x, k):
     return (x << k) | (x >> (64 - k))
 
-@njit(inline='always')
+@njit(inline='always', cache=True)
 def xoroshiro128pp(s0, s1):
     """
     Xoroshiro128++ RNG
@@ -68,7 +68,7 @@ def xoroshiro128pp(s0, s1):
     # 0x1p-53 = 1.0 / 9007199254740992.0
     return s0, s1, (result >> uint64(11)) * (1.0 / 9007199254740992.0)
 
-@njit(inline='always')
+@njit(inline='always', cache=True)
 def mix_seed(seed):
     """
     SplitMix64 风格的种子混淆函数
@@ -80,7 +80,7 @@ def mix_seed(seed):
     seed = seed ^ (seed >> uint64(31))
     return seed
 
-@njit
+@njit(cache=True)
 def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type, rng_s0, rng_s1):
     """
     核心抽卡逻辑 (使用 Numba 加速)
@@ -593,7 +593,7 @@ class GachaSimulator:
             if char not in self._4stars:
                 self._4stars[char] = [-1, 0]
 
-@njit(fastmath=True)
+@njit(fastmath=True, cache=True)
 def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, four_star_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total, seed):
     """
     运行单次完整的抽卡模拟 (Numba 加速)
@@ -955,7 +955,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     
     return pull_count
 
-@njit(parallel=True, fastmath=True)
+@njit(parallel=True, fastmath=True, cache=True)
 def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total, base_seed):
     """
     并行执行多次抽卡模拟 (使用 Numba parallel 加速)
