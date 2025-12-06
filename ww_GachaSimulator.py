@@ -4,6 +4,20 @@ import os
 import numpy as np
 import plotly.graph_objects as go
 from numba import njit, prange
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    def uint64(x=0) -> int: ...
+else:
+    from numba import uint64
+
+# 随机数种子配置
+# 设置为 None 则使用当前时间戳作为基准种子
+# 设置为 整数 则使用固定种子 (用于复现结果)
+BASE_SEED = None
+
+# 模拟次数配置
+SIMULATION_COUNT = 1000000
 
 # 预计算五星概率表 (包含软保底机制)
 # 0-65抽: 0.8%
@@ -33,8 +47,41 @@ OUTCOME_4_STAR_WEAPON = 43   # 四星武器 (未使用)
 OUTCOME_5_STAR_UP = 52       # 当期UP五星
 OUTCOME_5_STAR_STANDARD = 51 # 常驻五星
 
+@njit(inline='always')
+def rotl(x, k):
+    return (x << k) | (x >> (64 - k))
+
+@njit(inline='always')
+def xoroshiro128pp(s0, s1):
+    """
+    Xoroshiro128++ RNG
+    周期 2^128 - 1
+    """
+    # s0, s1 are uint64
+    result = rotl(s0 + s1, uint64(17)) + s0
+    
+    s1 ^= s0
+    s0 = rotl(s0, uint64(49)) ^ s1 ^ (s1 << uint64(21))
+    s1 = rotl(s1, uint64(28))
+    
+    # 使用高 53 位生成 [0, 1) 的 double
+    # 0x1p-53 = 1.0 / 9007199254740992.0
+    return s0, s1, (result >> uint64(11)) * (1.0 / 9007199254740992.0)
+
+@njit(inline='always')
+def mix_seed(seed):
+    """
+    SplitMix64 风格的种子混淆函数
+    用于将连续的索引 i 映射为分布均匀的伪随机种子
+    """
+    seed = uint64(seed)
+    seed = (seed ^ (seed >> uint64(30))) * uint64(0xbf58476d1ce4e5b9)
+    seed = (seed ^ (seed >> uint64(27))) * uint64(0x94d049bb133111eb)
+    seed = seed ^ (seed >> uint64(31))
+    return seed
+
 @njit
-def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type):
+def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type, rng_s0, rng_s1):
     """
     核心抽卡逻辑 (使用 Numba 加速)
 
@@ -44,16 +91,18 @@ def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type):
         is_guaranteed (bool): 是否为大保底 (必定获得当期UP五星)
         is_4star_guaranteed (bool): 是否为四星大保底 (必定获得当期UP四星)
         banner_type (int): 卡池类型，0-角色池, 1-武器池
+        rng_s0, rng_s1 (uint64): 随机数种子状态
 
     返回:
-        tuple: (outcome_type, new_pity_5, new_pity_4, new_is_guaranteed, new_is_4star_guaranteed)
+        tuple: (outcome_type, new_pity_5, new_pity_4, new_is_guaranteed, new_is_4star_guaranteed, new_rng_s0, new_rng_s1)
                outcome_type: 抽取结果类型常量
                new_pity_5: 新的五星保底计数
                new_pity_4: 新的四星保底计数
                new_is_guaranteed: 新的大保底状态
                new_is_4star_guaranteed: 新的四星大保底状态
+               new_rng_s0, new_rng_s1: 新的随机数种子状态
     """
-    r = random.random()
+    rng_s0, rng_s1, r = xoroshiro128pp(rng_s0, rng_s1)
     
     # --- 检查五星 ---
     current_pity_5 = pity_5 + 1
@@ -69,15 +118,17 @@ def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type):
         
         if banner_type == 1:
             # 武器池：必定UP (无歪机制)
-            return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, is_4star_guaranteed
+            return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, is_4star_guaranteed, rng_s0, rng_s1
         else:
             # 角色池：存在50%概率歪常驻
-            if not is_guaranteed and random.random() < 0.5:
-                # 歪常驻 -> 下次必定UP
-                return OUTCOME_5_STAR_STANDARD, new_pity_5, new_pity_4, True, is_4star_guaranteed
-            else:
-                # 中UP -> 清除大保底
-                return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, False, is_4star_guaranteed
+            if not is_guaranteed:
+                rng_s0, rng_s1, r_guarantee = xoroshiro128pp(rng_s0, rng_s1)
+                if r_guarantee < 0.5:
+                    # 歪常驻 -> 下次必定UP
+                    return OUTCOME_5_STAR_STANDARD, new_pity_5, new_pity_4, True, is_4star_guaranteed, rng_s0, rng_s1
+            
+            # 中UP -> 清除大保底
+            return OUTCOME_5_STAR_UP, new_pity_5, new_pity_4, False, is_4star_guaranteed, rng_s0, rng_s1
 
     # --- 检查四星 ---
     current_pity_4 = pity_4 + 1
@@ -93,26 +144,28 @@ def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type):
         if banner_type == 0:
             # 角色池：应用4星保底逻辑 (50% UP, 50% 其他)
             if is_4star_guaranteed:
-                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
+                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False, rng_s0, rng_s1
             else:
-                if random.random() < 0.5:
+                rng_s0, rng_s1, r_4star = xoroshiro128pp(rng_s0, rng_s1)
+                if r_4star < 0.5:
                     # 歪其他 -> 下次必定UP
-                    return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, True
+                    return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, True, rng_s0, rng_s1
                 else:
                     # 中UP -> 清除四星大保底
-                    return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
+                    return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False, rng_s0, rng_s1
         else:
             # 武器池：应用4星保底逻辑 (同角色池)
             if is_4star_guaranteed:
-                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
+                return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False, rng_s0, rng_s1
             else:
-                if random.random() < 0.5:
-                    return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, True
+                rng_s0, rng_s1, r_4star = xoroshiro128pp(rng_s0, rng_s1)
+                if r_4star < 0.5:
+                    return OUTCOME_4_STAR_OTHER, new_pity_5, new_pity_4, is_guaranteed, True, rng_s0, rng_s1
                 else:
-                    return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False
+                    return OUTCOME_4_STAR_UP, new_pity_5, new_pity_4, is_guaranteed, False, rng_s0, rng_s1
             
     # --- 三星 ---
-    return OUTCOME_3_STAR, pity_5 + 1, pity_4 + 1, is_guaranteed, is_4star_guaranteed
+    return OUTCOME_3_STAR, pity_5 + 1, pity_4 + 1, is_guaranteed, is_4star_guaranteed, rng_s0, rng_s1
 
 class GachaSimulator:
     """
@@ -135,6 +188,11 @@ class GachaSimulator:
         self.initial_coral = initial_coral
         self.initial_pity_5star = initial_pity_5star
         self.initial_pity_weapon = initial_pity_weapon
+        
+        # 初始化随机数种子 (128-bit state)
+        seed = uint64(random.randint(1, 0xFFFFFFFF))
+        self.rng_s0 = mix_seed(seed)
+        self.rng_s1 = mix_seed(self.rng_s0)
 
         # --- 保底状态 ---
         # 五星限定角色是否保底 (True: 下次必中UP)
@@ -291,8 +349,8 @@ class GachaSimulator:
         local_obtained_oscillated_coral = 0
 
         # 调用核心逻辑
-        outcome, self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, self.featured_4star_guaranteed = core_pull(
-            self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, self.featured_4star_guaranteed, 0
+        outcome, self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, self.featured_4star_guaranteed, self.rng_s0, self.rng_s1 = core_pull(
+            self.pity_5star, self.pity_4star, self.featured_5star_guaranteed, self.featured_4star_guaranteed, 0, self.rng_s0, self.rng_s1
         )
 
         if outcome == OUTCOME_5_STAR_UP:
@@ -392,8 +450,8 @@ class GachaSimulator:
         # 调用核心逻辑 (banner_type=1)
         # 注意：武器池没有“大保底”概念，is_guaranteed传False即可，返回值忽略
         # 武器池使用四星保底逻辑
-        outcome, self.pity_5star_weapon, self.pity_4star_weapon, _, self.featured_4star_weapon_guaranteed = core_pull(
-            self.pity_5star_weapon, self.pity_4star_weapon, False, self.featured_4star_weapon_guaranteed, 1
+        outcome, self.pity_5star_weapon, self.pity_4star_weapon, _, self.featured_4star_weapon_guaranteed, self.rng_s0, self.rng_s1 = core_pull(
+            self.pity_5star_weapon, self.pity_4star_weapon, False, self.featured_4star_weapon_guaranteed, 1, self.rng_s0, self.rng_s1
         )
 
         if outcome == OUTCOME_5_STAR_UP:
@@ -536,7 +594,7 @@ class GachaSimulator:
                 self._4stars[char] = [-1, 0]
 
 @njit(fastmath=True)
-def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, four_star_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total):
+def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, four_star_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total, seed):
     """
     运行单次完整的抽卡模拟 (Numba 加速)
 
@@ -559,6 +617,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
         num_total_4stars (int): 四星角色总数量
         char_pool_other_total (int): 角色池非UP四星池总大小 (非UP角色数 + 武器数)
         weapon_pool_other_total (int): 武器池非UP四星池总大小 (所有角色数 + 武器数)
+        seed (int): 随机数种子
 
     返回:
         int: pull_count (总抽数)
@@ -566,6 +625,10 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     # 局部变量初始化
     pity_5 = initial_pity_5star
     pity_4 = 0
+    
+    # 随机数状态
+    rng_s0 = mix_seed(uint64(seed))
+    rng_s1 = mix_seed(rng_s0)
     
     # 角色池状态
     featured_chain = -1 # -1 表示未拥有
@@ -594,7 +657,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     if target_chain >= 0 and featured_chain < 0:
         while featured_chain < 0:
             pull_count += 1
-            r = random.random()
+            rng_s0, rng_s1, r = xoroshiro128pp(rng_s0, rng_s1)
             
             # 快速路径: 绝大多数情况是3星 (优化性能)
             if pity_5 < 65 and pity_4 < 9 and r > 0.06:
@@ -636,7 +699,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                         break
                 else:
                     # 抽到常驻
-                    r_std = random.random()
+                    rng_s0, rng_s1, r_std = xoroshiro128pp(rng_s0, rng_s1)
                     idx = int(r_std * 5)
                     if idx >= 5: idx = 4
                     if standard_chains[idx] < 6:
@@ -673,7 +736,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 
                 if is_up_4:
                     # UP 4星
-                    r_up4 = random.random()
+                    rng_s0, rng_s1, r_up4 = xoroshiro128pp(rng_s0, rng_s1)
                     idx = int(r_up4 * num_up_4stars)
                     if idx >= num_up_4stars: idx = num_up_4stars - 1
                     if four_star_chains[idx] < 6:
@@ -684,7 +747,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                     coral += c
                 else:
                     # 其他 4星
-                    r_other4 = random.random()
+                    rng_s0, rng_s1, r_other4 = xoroshiro128pp(rng_s0, rng_s1)
                     val = r_other4 * char_pool_other_total
                     char_pool_other_chars = num_total_4stars - num_up_4stars
                     if val < char_pool_other_chars:
@@ -708,7 +771,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     # --- 阶段 2: 抽武器 ---
     while featured_weapon_count < target_weapon:
         pull_count += 1
-        r = random.random()
+        rng_s0, rng_s1, r = xoroshiro128pp(rng_s0, rng_s1)
         
         # 快速路径 (武器池)
         if pity_5_weapon < 65 and pity_4_weapon < 9 and r > 0.06:
@@ -755,7 +818,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 coral += c
             else:
                 # 其他
-                r_other4 = random.random()
+                rng_s0, rng_s1, r_other4 = xoroshiro128pp(rng_s0, rng_s1)
                 val = r_other4 * weapon_pool_other_total
                 if val < num_total_4stars:
                     idx = int(val)
@@ -792,7 +855,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 break
         
         pull_count += 1
-        r = random.random()
+        rng_s0, rng_s1, r = xoroshiro128pp(rng_s0, rng_s1)
         
         # 快速路径
         if pity_5 < 65 and pity_4 < 9 and r > 0.06:
@@ -826,7 +889,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                     c = 40
                 coral += c
             else:
-                r_std = random.random()
+                rng_s0, rng_s1, r_std = xoroshiro128pp(rng_s0, rng_s1)
                 idx = int(r_std * 5)
                 if idx >= 5: idx = 4
                 if standard_chains[idx] < 6:
@@ -859,7 +922,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                 is_4star_guaranteed = True
             
             if is_up_4:
-                r_up4 = random.random()
+                rng_s0, rng_s1, r_up4 = xoroshiro128pp(rng_s0, rng_s1)
                 idx = int(r_up4 * num_up_4stars)
                 if idx >= num_up_4stars: idx = num_up_4stars - 1
                 if four_star_chains[idx] < 6:
@@ -869,7 +932,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
                     c = 8
                 coral += c
             else:
-                r_other4 = random.random()
+                rng_s0, rng_s1, r_other4 = xoroshiro128pp(rng_s0, rng_s1)
                 val = r_other4 * char_pool_other_total
                 char_pool_other_chars = num_total_4stars - num_up_4stars
                 if val < char_pool_other_chars:
@@ -893,7 +956,7 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
     return pull_count
 
 @njit(parallel=True, fastmath=True)
-def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total):
+def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total, base_seed):
     """
     并行执行多次抽卡模拟 (使用 Numba parallel 加速)
 
@@ -911,6 +974,7 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
         num_total_4stars (int): 四星角色总数量
         char_pool_other_total (int): 角色池非UP四星池总大小
         weapon_pool_other_total (int): 武器池非UP四星池总大小
+        base_seed (int): 随机数基准种子
 
     返回:
         tuple: (pulls_count_arr, final_chains_arr)
@@ -921,7 +985,11 @@ def run_simulations_parallel(n, initial_guaranteed, initial_coral, initial_pity_
 
     # 并行循环执行模拟
     for i in prange(n):
-        res_pulls = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, final_chains_arr[i], num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total)
+        seed = uint64(i) + uint64(base_seed)
+        # 使用 SplitMix64 风格的混淆函数初始化种子
+        seed = mix_seed(seed)
+        if seed == 0: seed = uint64(1)
+        res_pulls = run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains, final_chains_arr[i], num_up_4stars, num_total_4stars, char_pool_other_total, weapon_pool_other_total, seed)
         pulls_count_arr[i] = res_pulls
 
     return pulls_count_arr, final_chains_arr
@@ -1021,7 +1089,7 @@ if __name__ == '__main__':
         initial_standard_chains[i] = sim.standard_5stars[char_name][0]
 
     # 模拟次数
-    n = 1000000
+    n = SIMULATION_COUNT
     
     print(f"开始模拟抽取 {target_chain} 链角色 + {target_weapon} 把专武，模拟次数：{n}...")
     print(f"正在使用 Numba Parallel (OpenMP/TBB) 进行并行计算...")
@@ -1030,9 +1098,18 @@ if __name__ == '__main__':
     # 注意：第一次运行会包含编译时间
     import time
     t0 = time.time()
+    
+    # 确定种子
+    if BASE_SEED is None:
+        current_seed = int(t0 * 1000000)
+        print(f"使用时间基准种子: {current_seed}")
+    else:
+        current_seed = int(BASE_SEED)
+        print(f"使用固定种子: {current_seed}")
+
     pulls_count_list, final_chains_list = run_simulations_parallel(
         n, initial_guaranteed, initial_coral, initial_pity_5star, initial_pity_weapon, target_chain, target_weapon, initial_four_star_chains, initial_standard_chains,
-        up_4stars_count, total_4stars_count, char_pool_non_up_total_count, weapon_pool_non_up_total_count
+        up_4stars_count, total_4stars_count, char_pool_non_up_total_count, weapon_pool_non_up_total_count, current_seed
     )
     t1 = time.time()
     print(f"模拟完成，耗时: {t1 - t0:.4f}s")
