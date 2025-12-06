@@ -1198,21 +1198,21 @@ if __name__ == '__main__':
         fig.add_trace(go.Bar(
             x=values,
             y=counts,
-            name='频率 (Frequency)',
+            name='频率',
             marker_color='skyblue',
             opacity=0.6,
             yaxis='y1',
-            hovertemplate='抽数: %{x}<br>频率: %{y}<extra></extra>'
+            hovertemplate='频率: %{y}<extra></extra>'
         ))
 
         # 2. 累积概率折线图 (右轴)
         fig.add_trace(go.Scatter(
             x=values,
             y=cumulative_probabilities,
-            name='累积概率 (Cumulative %)',
+            name='累积概率',
             line=dict(color='red', width=3),
             yaxis='y2',
-            hovertemplate='抽数: %{x}<br>累积概率: %{y:.2f}%<extra></extra>'
+            hovertemplate='累积概率: %{y:.2f}%<extra></extra>'
         ))
 
         # 3. 添加辅助线 (期望、众数、必得)
@@ -1294,7 +1294,7 @@ if __name__ == '__main__':
                 x=0.01,
                 y=0.99,
                 bgcolor='rgba(255, 255, 255, 0.8)',
-                font=dict(family="HarmonyOS Sans SC")
+                font=dict(family="HarmonyOS Sans SC", size=16)
             ),
             # 优化悬停标签样式
             hoverlabel=dict(
