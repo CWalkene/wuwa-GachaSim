@@ -21,15 +21,20 @@ SIMULATION_COUNT = 1000000
 
 # 预计算五星概率表 (包含保底机制)
 # 0-65抽: 0.8%
-# 66-79抽: 概率线性提升
-# 80抽: 100% (硬保底)
+# 66-78抽: 概率线性提升
+# 79抽: 100% (硬保底；第79抽的线性结果超过100%，按必出处理)
 RATE_5_STAR = np.zeros(81)
 for i in range(81):
-    if i < 66: RATE_5_STAR[i] = 0.008
-    elif i < 71: RATE_5_STAR[i] = 0.008 + 0.04 * (i - 65)
-    elif i < 76: RATE_5_STAR[i] = 0.208 + 0.08 * (i - 70)
-    elif i < 79: RATE_5_STAR[i] = 0.608 + 0.1 * (i - 75)
-    else: RATE_5_STAR[i] = 1.0
+    if i <= 65:
+        RATE_5_STAR[i] = 0.008
+    elif i <= 70:
+        RATE_5_STAR[i] = 0.008 + 0.04 * (i - 65)
+    elif i <= 75:
+        RATE_5_STAR[i] = 0.208 + 0.08 * (i - 70)
+    elif i <= 79:
+        RATE_5_STAR[i] = 0.608 + 0.1 * (i - 75)
+    else:
+        RATE_5_STAR[i] = 1.0
 
 # 预计算四星概率表
 # 0-9抽: 6.0%
@@ -107,14 +112,14 @@ def core_pull(pity_5, pity_4, is_guaranteed, is_4star_guaranteed, banner_type, r
     # --- 检查五星 ---
     current_pity_5 = pity_5 + 1
     rate_5 = 1.0
-    if current_pity_5 <= 80:
+    if current_pity_5 <= 79:
         rate_5 = RATE_5_STAR[current_pity_5]
         
     if rate_5 > r:
         # 触发五星
         new_pity_5 = 0
-        # 特殊规则：若本次同时满足四星保底(pity_4==9)，则重置四星保底 (五星优先级高于四星)
-        new_pity_4 = 0 if pity_4 == 9 else pity_4
+        # 五星属于四星及以上内容，获得后重置四星计数器。
+        new_pity_4 = 0
         
         if banner_type == 1:
             # 武器池：必定UP (无歪机制)
@@ -276,7 +281,8 @@ class GachaSimulator:
         self.rate_up_4stars = ['炽霞', '丹瑾', '卜灵']
 
         # 尝试加载配置文件
-        config_path = 'gacha_config.json'
+        # 配置文件应相对于脚本位置解析，避免从其他工作目录启动时找不到配置。
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'gacha_config.json')
         config_data = None
         if os.path.exists(config_path):
             try:
@@ -310,6 +316,11 @@ class GachaSimulator:
                     for name in config_data['4stars']:
                         self._4stars[name] = [-1, 0]
 
+        # 配置可能只声明 UP 名单而未在四星总池中提供条目；补齐后续逻辑所需的状态。
+        for name in self.rate_up_4stars:
+            if name not in self._4stars:
+                self._4stars[name] = [-1, 0]
+
         self.pity_4star = 0
 
         # 武器池初始化
@@ -323,7 +334,7 @@ class GachaSimulator:
 
     @staticmethod
     def rate_5star(rate_number: int):
-        if rate_number > 80: return 1.0
+        if rate_number > 79: return 1.0
         return RATE_5_STAR[rate_number]
 
     @staticmethod
@@ -370,12 +381,12 @@ class GachaSimulator:
             # 抽到常驻五星角色
             local_item = random.choice(list(self.standard_5stars.keys()))
             if self.standard_5stars[local_item][0] < 6:
-                # 常驻五星角色未满链，链数和抽到数+1、获得45余波珊瑚 (重复获得补偿)
+                # 常驻五星角色未满链：基础 15 珊瑚，非UP五星额外再获得 30 珊瑚
                 self.standard_5stars[local_item][0] += 1
                 self.standard_5stars[local_item][1] += 1
                 local_obtained_afterglow_coral = 45
             else:
-                # 常驻五星角色已满链，链数不变，抽到数+1、获得70余波珊瑚
+                # 常驻五星角色已满链：基础 40 珊瑚，非UP五星额外再获得 30 珊瑚
                 self.standard_5stars[local_item][1] += 1
                 local_obtained_afterglow_coral = 70
 
@@ -383,12 +394,12 @@ class GachaSimulator:
             # 抽到概率up四星角色
             local_item = random.choice(self.rate_up_4stars)
             if self._4stars[local_item][0] < 6:
-                # 四星角色未满链，链数和抽到数+1、获得3余波珊瑚
+                # 四星角色未满链，链数和抽到数+1、获得 3 余波珊瑚
                 self._4stars[local_item][0] += 1
                 self._4stars[local_item][1] += 1
                 local_obtained_afterglow_coral = 3
             else:
-                # 四星角色已满链，链数不变，抽到数+1、获得8余波珊瑚
+                # 四星角色已满链，链数不变，抽到数+1、获得 8 余波珊瑚
                 self._4stars[local_item][1] += 1
                 local_obtained_afterglow_coral = 8
 
@@ -406,18 +417,18 @@ class GachaSimulator:
                 # 抽到角色
                 local_item = local_non_rate_up_4stars[r]
                 if self._4stars[local_item][0] < 6:
-                    # 四星角色未满链，链数和抽到数+1、获得3余波珊瑚
+                    # 四星角色未满链，链数和抽到数+1、获得 3 余波珊瑚
                     self._4stars[local_item][0] += 1
                     self._4stars[local_item][1] += 1
                     local_obtained_afterglow_coral = 3
                 else:
-                    # 四星角色已满链，链数不变，抽到数+1、获得8余波珊瑚
+                    # 四星角色已满链，链数不变，抽到数+1、获得 8 余波珊瑚
                     self._4stars[local_item][1] += 1
                     local_obtained_afterglow_coral = 8
             else:
                 # 抽到武器
                 local_item = '4星武器'
-                # 获得3余波珊瑚
+                # 获得 3 余波珊瑚
                 local_obtained_afterglow_coral = 3
 
         else:
@@ -425,7 +436,7 @@ class GachaSimulator:
             local_item = '3星武器'
             # 三星武器计数+1
             self.weapon += 1
-            # 抽到三星武器，获得15残振珊瑚（小珊瑚）
+            # 抽到三星武器，获得 15 残振珊瑚（小珊瑚）
             local_obtained_oscillated_coral = 15
 
         return local_item, local_obtained_afterglow_coral, local_obtained_oscillated_coral
@@ -667,12 +678,12 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
 
             # 检查五星
             current_pity_5 = pity_5 + 1
-            rate_5 = RATE_5_STAR[current_pity_5] if current_pity_5 <= 80 else 1.0
+            rate_5 = RATE_5_STAR[current_pity_5] if current_pity_5 <= 79 else 1.0
             
             if r < rate_5:
                 # 抽到五星
                 pity_5 = 0
-                pity_4 = 0 if pity_4 == 9 else pity_4
+                pity_4 = 0
                 
                 is_up = False
                 if is_guaranteed:
@@ -780,12 +791,12 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             continue
             
         current_pity_5 = pity_5_weapon + 1
-        rate_5 = RATE_5_STAR[current_pity_5] if current_pity_5 <= 80 else 1.0
+        rate_5 = RATE_5_STAR[current_pity_5] if current_pity_5 <= 79 else 1.0
             
         if r < rate_5:
             # 五星 (武器池必定UP)
             pity_5_weapon = 0
-            pity_4_weapon = 0 if pity_4_weapon == 9 else pity_4_weapon
+            pity_4_weapon = 0
             featured_weapon_count += 1
             c = 15
             coral += c
@@ -864,11 +875,11 @@ def run_single_simulation(initial_guaranteed, initial_coral, initial_pity_5star,
             continue
             
         current_pity_5 = pity_5 + 1
-        rate_5 = RATE_5_STAR[current_pity_5] if current_pity_5 <= 80 else 1.0
+        rate_5 = RATE_5_STAR[current_pity_5] if current_pity_5 <= 79 else 1.0
             
         if r < rate_5:
             pity_5 = 0
-            pity_4 = 0 if pity_4 == 9 else pity_4
+            pity_4 = 0
             
             is_up = False
             if is_guaranteed:
@@ -1036,6 +1047,9 @@ if __name__ == '__main__':
     coral_input = input("目前有多少余波珊瑚: ")
     try:
         initial_coral = int(coral_input) if coral_input.strip() else 0
+        if initial_coral < 0:
+            print("输入错误，余波珊瑚不能为负数，默认0。")
+            initial_coral = 0
     except ValueError:
         print("输入错误，默认0。")
         initial_coral = 0
@@ -1155,7 +1169,7 @@ if __name__ == '__main__':
     print("\n" + "="*68)
     print(f"{'四星角色统计 (平均值)':^60}")
     print("="*68)
-    print_row('角色名', '初始链数', '平均获得数', '平均最终链数')
+    print_row('角色名', '初始链数', '平均新增链数', '平均最终链数')
     print("-" * 68)
     
     for i, name in enumerate(four_star_names):
@@ -1188,7 +1202,7 @@ if __name__ == '__main__':
     # --- 理论硬保底计算 (Theoretical Max) ---
     # 策略：基于“先抽1只角色 -> 抽满武器 -> 抽剩余角色”的最优策略计算
     # 假设运气最差情况：
-    # 1. 每次都吃满保底 (角色160/80，武器80)
+    # 1. 每次都吃满保底 (角色158/79，武器79)
     # 2. 每次都歪 (角色50%，武器不歪)
     # 3. 四星产出最低珊瑚
     
@@ -1202,7 +1216,7 @@ if __name__ == '__main__':
     target_copies = target_chain + 1
     needed_copies = max(0, target_copies - current_copies)
     
-    # 武器池最大抽数 (80抽必出，无歪)
+    # 武器池最大抽数 (79抽必出，无歪)
     max_weapon_pulls = target_weapon * 79 - initial_pity_weapon
     max_weapon_pulls = max(0, max_weapon_pulls)
     
@@ -1221,8 +1235,9 @@ if __name__ == '__main__':
             first_char_pulls = 79 - initial_pity_5star
             first_char_coral = 15 # 必中
         else:
+            # 最坏情况：先在第79抽歪常驻，再在第79抽中UP。
             first_char_pulls = 158 - initial_pity_5star
-            first_char_coral = 60 # 歪(45) + 中(15)
+            first_char_coral = 60 # 歪(15+30) + 中UP(15)
         
         first_char_pulls = max(0, first_char_pulls)
         # 加上四星珊瑚
@@ -1242,7 +1257,7 @@ if __name__ == '__main__':
     def calc_rest_cost(n):
         if n <= 0: return 0, 0
         # 后续角色默认都是小保底开始 (最坏情况)
-        # 每次 158 抽 (79歪 + 79中)，产出 60 珊瑚 (45+15)
+        # 每次 158 抽 (79歪 + 79中)，最坏情况下产出 60 珊瑚 (45+15)
         p = n * 158
         c = n * 60 + (p // 10) * coral_per_4star
         return p, c
