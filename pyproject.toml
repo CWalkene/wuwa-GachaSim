@@ -1,7 +1,7 @@
 [project]
-name = "wuwa-gacha-simulator"
+name = "wuwa-GachaSim"
 version = "0.1.0"
-description = "鸣潮抽卡概率分布模拟器"
+description = "鸣潮抽卡模拟-概率分布生成器"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "numba==0.62.1",
