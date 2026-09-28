@@ -1,8 +1,13 @@
 import random
 import json
 import os
+import threading
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 from numba import njit, prange
 from typing import TYPE_CHECKING
 
@@ -1401,12 +1406,74 @@ if __name__ == '__main__':
         )
 
         # config 配置：开启滚轮缩放，隐藏 Plotly logo，开启响应式
-        fig.show(config={
+        plot_config = {
             'scrollZoom': True, 
             'displaylogo': False, 
             'responsive': True,
             'modeBarButtonsToRemove': ['select2d', 'lasso2d'] # 移除不常用的选择工具，保持界面简洁
-        })
+        }
+
+        # 使用持续一段时间的 localhost 临时服务，避免 Plotly 默认的一次性
+        # HTTP 服务在浏览器尚未发起请求时就失去响应的问题。HTML 和 Plotly.js
+        # 都保存在内存中，不会生成持久文件。
+        html = pio.to_html(
+            fig,
+            config=plot_config,
+            include_plotlyjs=True,
+            full_html=True,
+            auto_play=False,
+            validate=False,
+        ).encode("utf-8")
+
+        class PlotlyRequestHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path.split("?", 1)[0] not in ("/", "/index.html"):
+                    self.send_error(404)
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(html)
+
+            def log_message(self, format, *args):
+                # 避免每次浏览器刷新都污染模拟结果输出。
+                return
+
+        server = None
+        server_thread = None
+        try:
+            server = ThreadingHTTPServer(("127.0.0.1", 0), PlotlyRequestHandler)
+            server.daemon_threads = True
+            server.timeout = 0.5
+            server_thread = threading.Thread(
+                target=server.serve_forever,
+                kwargs={"poll_interval": 0.1},
+                daemon=True,
+            )
+            server_thread.start()
+
+            chart_url = f"http://127.0.0.1:{server.server_port}/"
+            print(f"交互式图表已启动：{chart_url}")
+            print("图表服务将在 10 秒后关闭；期间可刷新页面。按 Ctrl+C 可提前关闭。")
+            if not webbrowser.open(chart_url, new=2, autoraise=True):
+                print(f"[警告] 未能自动打开浏览器，请手动访问：{chart_url}")
+
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                time.sleep(min(0.1, deadline - time.monotonic()))
+        except OSError as exc:
+            print(f"\n[错误] 无法启动 localhost 图表服务：{exc}")
+        except KeyboardInterrupt:
+            print("\n已收到 Ctrl+C，正在关闭图表服务。")
+        finally:
+            if server is not None:
+                server.shutdown()
+                server.server_close()
+            if server_thread is not None:
+                server_thread.join(timeout=2)
+            print("localhost 图表服务已关闭。")
     else:
         print("\n[警告] 未安装 plotly，无法生成图表。请运行 pip install plotly 安装。")
 
