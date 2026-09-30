@@ -5,7 +5,7 @@
 底层使用 `Numba` 的 `njit` 实现即时编译与并行计算，突破 Python 原生性能瓶颈，实现百万级模拟的秒级响应。
 
 ## 环境搭建与运行
-项目要求使用 Python 3.12。请先安装 [uv](https://docs.astral.sh/uv/)，然后执行：
+项目要求使用 Python 3.12。请先安装 [uv](https://docs.astral.sh/uv/)，然后在项目目录执行：
 
 ```powershell
 uv sync
